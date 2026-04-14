@@ -5,6 +5,7 @@ import html
 import logging
 from dataclasses import dataclass, field
 from http import HTTPStatus
+from pathlib import Path
 from typing import Callable
 
 from src.config import AppConfig
@@ -141,6 +142,19 @@ def _respond_html(start_response, page: str, status: HTTPStatus = HTTPStatus.OK)
     return [body]
 
 
+def _group_processed_files_by_type(
+    processed_files: list[ProcessedFileResult],
+) -> list[tuple[str, int]]:
+    counts_by_type: dict[str, int] = {}
+
+    for processed_file in processed_files:
+        suffix = Path(processed_file.filename).suffix.lower()
+        file_type = suffix if suffix else "No extension"
+        counts_by_type[file_type] = counts_by_type.get(file_type, 0) + 1
+
+    return sorted(counts_by_type.items(), key=lambda item: (-item[1], item[0]))
+
+
 def render_page(config: AppConfig, view_state: ViewState) -> str:
     customer_value = html.escape(view_state.customer)
     app_env = html.escape(config.app_env)
@@ -170,6 +184,13 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             "</li>"
             for destination in result.part_destinations
         )
+        processed_files_by_type_html = "".join(
+            "<li>"
+            f"<span>{html.escape(file_type)}</span>"
+            f"<strong>{count}</strong>"
+            "</li>"
+            for file_type, count in _group_processed_files_by_type(result.processed_files)
+        )
         result_html = (
             '<section class="result success" aria-live="polite">'
             "<h2>Upload complete</h2>"
@@ -179,10 +200,13 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             f"<div><dt>Customer folder</dt><dd>{html.escape(result.sanitized_customer_folder_name)}</dd></div>"
             f"<div><dt>Top-level parts</dt><dd>{len(result.part_destinations)}</dd></div>"
             f"<div><dt>Processed files</dt><dd>{len(result.processed_files)}</dd></div>"
-            f"<div><dt>Copied files</dt><dd>{result.copied_file_count}</dd></div>"
             f"<div><dt>Automation customer path</dt><dd>{html.escape(str(result.automation_customer_path))}</dd></div>"
             f"<div><dt>Working customer path</dt><dd>{html.escape(str(result.working_customer_path))}</dd></div>"
             "</dl>"
+            "<div class=\"result-list\">"
+            "<h3>Processed files by type</h3>"
+            f"<ul>{processed_files_by_type_html}</ul>"
+            "</div>"
             "<div class=\"part-list\">"
             "<h3>Part folders created</h3>"
             f"<ul>{created_parts_html}</ul>"
@@ -357,9 +381,18 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
     .part-list {{
       margin-top: 1rem;
     }}
+    .result-list {{
+      margin-top: 1rem;
+    }}
+    .result-list ul,
     .part-list ul {{
       margin: 0;
       padding-left: 1.25rem;
+    }}
+    .result-list li {{
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
     }}
     @media (max-width: 640px) {{
       main {{ margin: 2rem auto; }}
