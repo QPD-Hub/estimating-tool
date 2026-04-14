@@ -35,20 +35,19 @@ class PathValidationError(ValueError):
 
 
 def sanitize_customer_folder_name(customer_name: str) -> str:
-    sanitized = INVALID_PATH_CHARS_PATTERN.sub(" ", customer_name.strip())
-    sanitized = re.sub(r"\s+", " ", sanitized).strip(" .")
+    return _sanitize_folder_name(
+        customer_name,
+        empty_message="Customer name is invalid after removing illegal path characters.",
+        reserved_message_prefix="Customer folder name is not allowed on the filesystem",
+    )
 
-    if not sanitized:
-        raise PathValidationError(
-            "Customer name is invalid after removing illegal path characters."
-        )
 
-    if sanitized.upper() in WINDOWS_RESERVED_NAMES:
-        raise PathValidationError(
-            f"Customer folder name is not allowed on the filesystem: {sanitized}"
-        )
-
-    return sanitized
+def sanitize_top_level_part_folder_name(part_name: str) -> str:
+    return _sanitize_folder_name(
+        part_name,
+        empty_message="Top Level Part name is invalid after removing illegal path characters.",
+        reserved_message_prefix="Top Level Part folder name is not allowed on the filesystem",
+    )
 
 
 def validate_upload_filename(filename: str) -> None:
@@ -84,3 +83,20 @@ def validate_upload_filename(filename: str) -> None:
         raise PathValidationError(
             f"Uploaded filename is reserved by the filesystem and cannot be copied as-is: {filename}"
         )
+
+
+def _sanitize_folder_name(
+    value: str, empty_message: str, reserved_message_prefix: str
+) -> str:
+    sanitized = INVALID_PATH_CHARS_PATTERN.sub(" ", value.strip())
+    sanitized = re.sub(r"\s+", " ", sanitized).strip(" .")
+
+    if not sanitized:
+        raise PathValidationError(empty_message)
+
+    if sanitized.upper() in WINDOWS_RESERVED_NAMES:
+        raise PathValidationError(
+            f"{reserved_message_prefix}: {sanitized}"
+        )
+
+    return sanitized

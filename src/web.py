@@ -3,7 +3,7 @@ from __future__ import annotations
 import cgi
 import html
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from typing import Callable
 
@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class ViewState:
     customer: str = ""
+    top_level_parts: list[str] = field(default_factory=lambda: [""])
     message: str = ""
     error: str = ""
     result: DocumentIntakeResult | None = None
@@ -56,6 +57,7 @@ def create_app(config: AppConfig) -> Callable:
 
 def _handle_upload(environ, start_response, config, service: DocumentIntakeService):
     customer = ""
+    top_level_parts = [""]
     try:
         form = cgi.FieldStorage(
             fp=environ["wsgi.input"],
@@ -63,6 +65,7 @@ def _handle_upload(environ, start_response, config, service: DocumentIntakeServi
             keep_blank_values=True,
         )
         customer = form.getfirst("customer", "")
+        top_level_parts = form.getlist("top_level_parts") or [""]
         file_fields = form["documents"] if "documents" in form else []
         if not isinstance(file_fields, list):
             file_fields = [file_fields]
@@ -78,9 +81,10 @@ def _handle_upload(environ, start_response, config, service: DocumentIntakeServi
                 )
             )
 
-        result = service.intake_documents(customer, uploaded_files)
+        result = service.intake_documents(customer, top_level_parts, uploaded_files)
         message = (
-            f"Copied {len(result.copied_files)} file(s) for "
+            f"Processed {len(result.processed_files)} file(s) into "
+            f"{len(result.part_destinations)} top-level part folder(s) for "
             f"{result.customer_name}."
         )
         return _respond_html(
@@ -89,6 +93,7 @@ def _handle_upload(environ, start_response, config, service: DocumentIntakeServi
                 config,
                 ViewState(
                     customer=result.customer_name,
+                    top_level_parts=result.top_level_parts,
                     message=message,
                     result=result,
                 ),
@@ -100,7 +105,11 @@ def _handle_upload(environ, start_response, config, service: DocumentIntakeServi
             start_response,
             render_page(
                 config,
-                ViewState(customer=customer, error=str(exc)),
+                ViewState(
+                    customer=customer,
+                    top_level_parts=top_level_parts,
+                    error=str(exc),
+                ),
             ),
             status=HTTPStatus.BAD_REQUEST,
         )
@@ -111,6 +120,8 @@ def _handle_upload(environ, start_response, config, service: DocumentIntakeServi
             render_page(
                 config,
                 ViewState(
+                    customer=customer,
+                    top_level_parts=top_level_parts,
                     error="Unexpected server error while processing the upload.",
                 ),
             ),
@@ -133,6 +144,16 @@ def _respond_html(start_response, page: str, status: HTTPStatus = HTTPStatus.OK)
 def render_page(config: AppConfig, view_state: ViewState) -> str:
     customer_value = html.escape(view_state.customer)
     app_env = html.escape(config.app_env)
+    part_values = view_state.top_level_parts or [""]
+
+    parts_inputs_html = "".join(
+        (
+            '<input name="top_level_parts" type="text" '
+            f'value="{html.escape(part_value)}" '
+            'placeholder="Enter a top-level part" required>'
+        )
+        for part_value in part_values
+    )
 
     result_html = ""
     if view_state.error:
@@ -143,7 +164,12 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
         )
     elif view_state.result:
         result = view_state.result
-        copied_count = len(result.copied_files)
+        created_parts_html = "".join(
+            "<li>"
+            f"{html.escape(destination.sanitized_part_folder_name)}"
+            "</li>"
+            for destination in result.part_destinations
+        )
         result_html = (
             '<section class="result success" aria-live="polite">'
             "<h2>Upload complete</h2>"
@@ -151,10 +177,16 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             "<dl>"
             f"<div><dt>Customer</dt><dd>{html.escape(result.customer_name)}</dd></div>"
             f"<div><dt>Customer folder</dt><dd>{html.escape(result.sanitized_customer_folder_name)}</dd></div>"
-            f"<div><dt>Files copied</dt><dd>{copied_count}</dd></div>"
-            f"<div><dt>Automation destination</dt><dd>{html.escape(str(result.automation_path))}</dd></div>"
-            f"<div><dt>Working destination</dt><dd>{html.escape(str(result.working_path))}</dd></div>"
+            f"<div><dt>Top-level parts</dt><dd>{len(result.part_destinations)}</dd></div>"
+            f"<div><dt>Processed files</dt><dd>{len(result.processed_files)}</dd></div>"
+            f"<div><dt>Copied files</dt><dd>{result.copied_file_count}</dd></div>"
+            f"<div><dt>Automation customer path</dt><dd>{html.escape(str(result.automation_customer_path))}</dd></div>"
+            f"<div><dt>Working customer path</dt><dd>{html.escape(str(result.working_customer_path))}</dd></div>"
             "</dl>"
+            "<div class=\"part-list\">"
+            "<h3>Part folders created</h3>"
+            f"<ul>{created_parts_html}</ul>"
+            "</div>"
             "</section>"
         )
 
@@ -232,6 +264,23 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       gap: 0.45rem;
       font-weight: 600;
     }}
+    .field-group {{
+      display: grid;
+      gap: 0.65rem;
+    }}
+    .field-group-header {{
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: center;
+    }}
+    .field-group-header span {{
+      font-weight: 600;
+    }}
+    .part-inputs {{
+      display: grid;
+      gap: 0.65rem;
+    }}
     input[type="text"],
     input[type="file"] {{
       width: 100%;
@@ -253,6 +302,12 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       font: inherit;
       font-weight: 700;
       cursor: pointer;
+    }}
+    button.secondary {{
+      min-width: 0;
+      padding: 0.65rem 1rem;
+      background: rgba(13, 92, 99, 0.12);
+      color: var(--accent-strong);
     }}
     button:disabled {{
       opacity: 0.7;
@@ -278,7 +333,8 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       color: var(--error-ink);
       border-color: rgba(138, 28, 18, 0.18);
     }}
-    .result h2 {{
+    .result h2,
+    .result h3 {{
       margin: 0 0 0.6rem;
       font-size: 1.1rem;
     }}
@@ -298,10 +354,18 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       margin: 0.1rem 0 0;
       word-break: break-word;
     }}
+    .part-list {{
+      margin-top: 1rem;
+    }}
+    .part-list ul {{
+      margin: 0;
+      padding-left: 1.25rem;
+    }}
     @media (max-width: 640px) {{
       main {{ margin: 2rem auto; }}
       .panel {{ padding: 1.25rem; }}
       button {{ width: 100%; }}
+      .field-group-header {{ flex-direction: column; align-items: stretch; }}
     }}
   </style>
 </head>
@@ -310,18 +374,27 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
     <section class="panel">
       <div class="eyebrow">Environment: {app_env}</div>
       <h1>Phase 1 Document Handoff</h1>
-      <p>Upload the incoming customer documents. Files are copied as-is into both configured roots for downstream processing.</p>
+      <p>Upload the incoming customer documents. Zip files are unpacked, folder structure is flattened, and the processed file set is copied into each selected top-level part under both configured roots.</p>
       <form method="post" enctype="multipart/form-data" id="handoff-form" novalidate>
         <label for="customer">
           Customer
           <input id="customer" name="customer" type="text" value="{customer_value}" required>
         </label>
+        <div class="field-group">
+          <div class="field-group-header">
+            <span>Top Level Parts</span>
+            <button type="button" class="secondary" id="add-part-button">+ Add Part</button>
+          </div>
+          <div class="part-inputs" id="part-inputs">
+            {parts_inputs_html}
+          </div>
+        </div>
         <label for="documents">
           Documents
           <input id="documents" name="documents" type="file" multiple required>
         </label>
         <p class="hint" id="client-message" aria-live="polite"></p>
-        <button type="submit" id="submit-button">Copy Documents</button>
+        <button type="submit" id="submit-button">Process Documents</button>
       </form>
       {result_html}
     </section>
@@ -331,16 +404,44 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
     const submitButton = document.getElementById("submit-button");
     const customerInput = document.getElementById("customer");
     const documentsInput = document.getElementById("documents");
+    const partInputs = document.getElementById("part-inputs");
+    const addPartButton = document.getElementById("add-part-button");
     const clientMessage = document.getElementById("client-message");
+
+    function createPartInput() {{
+      const input = document.createElement("input");
+      input.name = "top_level_parts";
+      input.type = "text";
+      input.placeholder = "Enter a top-level part";
+      input.required = true;
+      return input;
+    }}
+
+    addPartButton.addEventListener("click", () => {{
+      partInputs.appendChild(createPartInput());
+    }});
 
     form.addEventListener("submit", (event) => {{
       const customer = customerInput.value.trim();
       const fileCount = documentsInput.files.length;
+      const partValues = Array.from(
+        partInputs.querySelectorAll('input[name="top_level_parts"]')
+      ).map((input) => input.value.trim());
 
       if (!customer) {{
         event.preventDefault();
         clientMessage.textContent = "Customer is required.";
         customerInput.focus();
+        return;
+      }}
+
+      if (!partValues.some((value) => value)) {{
+        event.preventDefault();
+        clientMessage.textContent = "Enter at least one Top Level Part.";
+        const firstPartInput = partInputs.querySelector('input[name="top_level_parts"]');
+        if (firstPartInput) {{
+          firstPartInput.focus();
+        }}
         return;
       }}
 
@@ -352,8 +453,8 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       }}
 
       submitButton.disabled = true;
-      submitButton.textContent = "Copying...";
-      clientMessage.textContent = "Uploading and copying files...";
+      submitButton.textContent = "Processing...";
+      clientMessage.textContent = "Uploading and processing files...";
     }});
   </script>
 </body>
