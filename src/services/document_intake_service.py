@@ -263,7 +263,7 @@ class DocumentIntakeService:
             return filename
 
         try:
-            bom_identity = extract_bom_identity(content)
+            bom_identity = extract_bom_identity(filename, content)
         except BomWorkbookError as exc:
             raise DocumentIntakeError(
                 f"Unable to derive BOM filename from workbook '{filename}': {exc}"
@@ -299,7 +299,10 @@ class DocumentIntakeService:
     @staticmethod
     def _is_bom_workbook_candidate(filename: str) -> bool:
         normalized_filename = filename.lower()
-        return normalized_filename.endswith(".xlsx") and "bom" in normalized_filename
+        return (
+            normalized_filename.endswith((".xlsx", ".xls"))
+            and "bom" in normalized_filename
+        )
 
     @staticmethod
     def _flatten_zip_member_name(member_name: str) -> str:

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import BytesIO
+from pathlib import Path
 
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
+import xlrd
 
 REQUIRED_BOM_HEADERS = (
     "ORIGINAL",
@@ -38,7 +40,17 @@ class BomIdentity:
         return f"{self.part_number}_{self.revision}_BOM.xlsx"
 
 
-def extract_bom_identity(workbook_content: bytes) -> BomIdentity:
+def extract_bom_identity(filename: str, workbook_content: bytes) -> BomIdentity:
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".xlsx":
+        return _extract_xlsx_bom_identity(workbook_content)
+    if suffix == ".xls":
+        return _extract_xls_bom_identity(workbook_content)
+
+    raise BomWorkbookError(f"Unsupported BOM workbook type: {suffix or filename}")
+
+
+def _extract_xlsx_bom_identity(workbook_content: bytes) -> BomIdentity:
     try:
         workbook = load_workbook(
             filename=BytesIO(workbook_content),
@@ -82,6 +94,41 @@ def extract_bom_identity(workbook_content: bytes) -> BomIdentity:
         workbook.close()
 
 
+def _extract_xls_bom_identity(workbook_content: bytes) -> BomIdentity:
+    try:
+        workbook = xlrd.open_workbook(file_contents=workbook_content)
+    except (xlrd.XLRDError, OSError, ValueError, EOFError) as exc:
+        raise BomWorkbookError("Workbook could not be read.") from exc
+    except Exception as exc:
+        raise BomWorkbookError("Workbook could not be read.") from exc
+
+    try:
+        worksheet = workbook.sheet_by_name("BOM")
+    except xlrd.biffh.XLRDError as exc:
+        raise BomWorkbookError("Worksheet 'BOM' is required.") from exc
+
+    rows = (_normalize_xls_row(worksheet.row_values(index)) for index in range(worksheet.nrows))
+    header_map, header_row_index = _find_header_map(rows)
+
+    for row_index in range(header_row_index, worksheet.nrows):
+        row = _normalize_xls_row(worksheet.row_values(row_index))
+        level_value = row[header_map["Level"]] if header_map["Level"] < len(row) else None
+        if not _is_level_zero(level_value):
+            continue
+
+        part_number = _cell_from_row(row, header_map["Part Number"])
+        revision = _cell_from_row(row, header_map["Revision"])
+
+        if not part_number:
+            raise BomWorkbookError("Level 0 row is missing a value for 'Part Number'.")
+        if not revision:
+            raise BomWorkbookError("Level 0 row is missing a value for 'Revision'.")
+
+        return BomIdentity(part_number=part_number, revision=revision)
+
+    raise BomWorkbookError("No level 0 row exists on worksheet 'BOM'.")
+
+
 def _find_header_map(rows) -> tuple[dict[str, int], int]:
     for index, row in enumerate(rows, start=1):
         header_map = {
@@ -109,6 +156,24 @@ def _is_level_zero(value: object) -> bool:
     if isinstance(value, str):
         return value.strip() == "0"
     return False
+
+
+def _normalize_xls_row(row: list[object]) -> list[object]:
+    normalized_row: list[object] = []
+
+    for value in row:
+        if isinstance(value, float) and value.is_integer():
+            normalized_row.append(int(value))
+            continue
+        normalized_row.append(value)
+
+    return normalized_row
+
+
+def _cell_from_row(row: list[object], index: int) -> str:
+    if index >= len(row):
+        return ""
+    return _stringify_cell(row[index])
 
 
 def _stringify_cell(value: object) -> str:
