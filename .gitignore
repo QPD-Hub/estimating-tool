@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+# Env files
+.env
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+
+# Local storage mounts (IMPORTANT)
+data/

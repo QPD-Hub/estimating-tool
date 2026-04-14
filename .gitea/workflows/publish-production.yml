@@ -1,0 +1,40 @@
+name: Publish Production Docker Image
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  REGISTRY: git.production.qpd.lan
+  OWNER: qpd
+  IMAGE_NAME: estimating-tool
+
+jobs:
+  build-and-push:
+    runs-on: docker-build
+
+    steps:
+      - name: Checkout repository with git
+        run: |
+          git clone http://jjordan:${{ secrets.REPO_TOKEN }}@192.168.1.33:3000/${{ gitea.repository }}.git repo
+          cd repo
+          git checkout ${{ gitea.sha }}
+
+      - name: Log in to local Gitea registry
+        run: |
+          echo "${{ secrets.REGISTRY_TOKEN }}" | docker login ${{ env.REGISTRY }} -u "${{ secrets.REGISTRY_USER }}" --password-stdin
+
+      - name: Build Docker image
+        run: |
+          cd repo
+          docker build \
+            -f ./Dockerfile \
+            -t ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.IMAGE_NAME }}:prod \
+            -t ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.IMAGE_NAME }}:sha-${{ gitea.sha }} \
+            .
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.IMAGE_NAME }}:prod
+          docker push ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.IMAGE_NAME }}:sha-${{ gitea.sha }}
