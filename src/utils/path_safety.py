@@ -85,6 +85,30 @@ def validate_upload_filename(filename: str) -> None:
         )
 
 
+def sanitize_processed_filename(filename: str) -> str:
+    if not filename or not filename.strip():
+        raise PathValidationError("Processed filename is invalid after sanitization.")
+
+    sanitized = INVALID_PATH_CHARS_PATTERN.sub(" ", filename.strip())
+    sanitized = re.sub(r"\s+", " ", sanitized).strip(" .")
+
+    if not sanitized:
+        raise PathValidationError("Processed filename is invalid after sanitization.")
+
+    if "/" in sanitized or "\\" in sanitized:
+        raise PathValidationError(
+            f"Processed filename contains path separators after sanitization: {filename}"
+        )
+
+    stem = sanitized.rsplit(".", 1)[0]
+    if stem.upper() in WINDOWS_RESERVED_NAMES:
+        raise PathValidationError(
+            f"Processed filename is reserved by the filesystem: {sanitized}"
+        )
+
+    return sanitized
+
+
 def _sanitize_folder_name(
     value: str, empty_message: str, reserved_message_prefix: str
 ) -> str:

@@ -7,9 +7,11 @@ from pathlib import Path
 from typing import Iterable
 from zipfile import BadZipFile, ZipFile
 
+from src.services.bom_workbook import BomWorkbookError, extract_bom_identity
 from src.utils.path_safety import (
     PathValidationError,
     sanitize_customer_folder_name,
+    sanitize_processed_filename,
     sanitize_top_level_part_folder_name,
     validate_upload_filename,
 )
@@ -243,14 +245,31 @@ class DocumentIntakeService:
         content: bytes,
     ) -> None:
         validate_upload_filename(filename)
+        processed_filename = self._resolve_processed_filename(filename, content)
 
-        if filename in seen_filenames:
+        if processed_filename in seen_filenames:
             raise DocumentIntakeError(
-                f"Duplicate processed filename detected after flattening: {filename}"
+                "Duplicate processed filename detected after flattening: "
+                f"{processed_filename}"
             )
 
-        seen_filenames.add(filename)
-        processed_files.append(_ProcessedFile(filename=filename, content=content))
+        seen_filenames.add(processed_filename)
+        processed_files.append(
+            _ProcessedFile(filename=processed_filename, content=content)
+        )
+
+    def _resolve_processed_filename(self, filename: str, content: bytes) -> str:
+        if not self._is_bom_workbook_candidate(filename):
+            return filename
+
+        try:
+            bom_identity = extract_bom_identity(content)
+        except BomWorkbookError as exc:
+            raise DocumentIntakeError(
+                f"Unable to derive BOM filename from workbook '{filename}': {exc}"
+            ) from exc
+
+        return sanitize_processed_filename(bom_identity.filename)
 
     def _validate_destinations(
         self,
@@ -276,6 +295,11 @@ class DocumentIntakeService:
     @staticmethod
     def _is_zip_upload(filename: str) -> bool:
         return filename.lower().endswith(".zip")
+
+    @staticmethod
+    def _is_bom_workbook_candidate(filename: str) -> bool:
+        normalized_filename = filename.lower()
+        return normalized_filename.endswith(".xlsx") and "bom" in normalized_filename
 
     @staticmethod
     def _flatten_zip_member_name(member_name: str) -> str:
