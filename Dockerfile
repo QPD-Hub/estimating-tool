@@ -7,14 +7,8 @@ WORKDIR /app
 
 COPY . .
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        gcc \
-        libc-dev \
-        freetds-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
 ENV APP_ENV=production
 ENV PORT=8000
