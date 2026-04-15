@@ -43,7 +43,6 @@ ROW_COLUMNS = (
     "MFRNumber",
     "LeadTimeDays",
     "Cost",
-    "IsLevel0",
     "ValidationMessage",
 )
 

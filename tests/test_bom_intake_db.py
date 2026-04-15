@@ -182,7 +182,6 @@ class BomIntakeDbServiceTests(unittest.TestCase):
                     "MFRNumber": None,
                     "LeadTimeDays": None,
                     "Cost": None,
-                    "IsLevel0": True,
                     "ValidationMessage": None,
                 }
             ],
@@ -197,6 +196,7 @@ class BomIntakeDbServiceTests(unittest.TestCase):
         self.assertIn("DECLARE @Roots dbo.udtt_BOM_Intake_Root;", process_sql)
         self.assertIn("DECLARE @Rows dbo.udtt_BOM_Intake_Row;", process_sql)
         self.assertIn("EXEC dbo.usp_BOM_Intake_ProcessStandardized", process_sql)
+        self.assertNotIn("IsLevel0", process_sql)
         self.assertEqual(process_params[0], "R1")
         self.assertEqual(process_params[-2], 321)
         self.assertEqual(process_params[-1], "estimator")
