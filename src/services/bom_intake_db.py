@@ -79,18 +79,19 @@ class BomIntakeDbService:
         connect: Callable[..., Any] | None = None,
     ) -> None:
         self._sql_config = sql_config
-        self._connect = connect or _load_pyodbc_connect()
+        self._connect = connect or _load_pymssql_connect()
 
-    def build_connection_string(self) -> str:
-        return (
-            f"DRIVER={{{self._sql_config.driver}}};"
-            f"SERVER={self._sql_config.host},{self._sql_config.port};"
-            f"DATABASE={self._sql_config.database};"
-            f"UID={self._sql_config.username};"
-            f"PWD={self._sql_config.password};"
-            f"Encrypt={self._sql_config.encrypt};"
-            f"TrustServerCertificate={self._sql_config.trust_server_certificate};"
-        )
+    def build_connection_kwargs(self) -> dict[str, object]:
+        return {
+            "server": self._sql_config.host,
+            "user": self._sql_config.username,
+            "password": self._sql_config.password,
+            "database": self._sql_config.database,
+            "port": self._sql_config.port,
+            "timeout": self._sql_config.timeout,
+            "login_timeout": self._sql_config.timeout,
+            "autocommit": False,
+        }
 
     def create_and_process_intake(
         self,
@@ -103,7 +104,7 @@ class BomIntakeDbService:
         if not detected_by.strip():
             raise BomIntakeDbError("DetectedBy is required for BOM intake processing.")
 
-        connection_string = self.build_connection_string()
+        connection_kwargs = self.build_connection_kwargs()
         logger.info(
             "Starting BOM intake create call for customer '%s' and source file '%s'.",
             header.get("CustomerName"),
@@ -111,10 +112,7 @@ class BomIntakeDbService:
         )
 
         try:
-            connection = self._connect(
-                connection_string,
-                timeout=self._sql_config.timeout,
-            )
+            connection = self._connect(**connection_kwargs)
         except Exception as exc:
             logger.exception(
                 "SQL connection failed for host '%s', database '%s'.",
@@ -125,42 +123,42 @@ class BomIntakeDbService:
                 "Unable to connect to SQL Server for BOM intake."
             ) from exc
 
-        with connection:
-            cursor = connection.cursor()
-            try:
-                bom_intake_id = self._create_intake(cursor, header)
-                result = self._process_standardized_payload(
-                    cursor=cursor,
-                    bom_intake_id=bom_intake_id,
-                    detected_by=detected_by,
-                    root_candidates=root_candidates,
-                    bom_rows=bom_rows,
-                )
-                connection.commit()
-                return result
-            except Exception:
-                connection.rollback()
-                raise
-            finally:
-                cursor.close()
+        cursor = connection.cursor()
+        try:
+            bom_intake_id = self._create_intake(cursor, header)
+            result = self._process_standardized_payload(
+                cursor=cursor,
+                bom_intake_id=bom_intake_id,
+                detected_by=detected_by,
+                root_candidates=root_candidates,
+                bom_rows=bom_rows,
+            )
+            connection.commit()
+            return result
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            cursor.close()
+            connection.close()
 
     def _create_intake(self, cursor: Any, header: dict[str, object]) -> int:
         sql = """
 EXEC dbo.usp_BOM_Intake_Create
-    @CustomerName = ?,
-    @QuoteNumber = ?,
-    @SourceFileName = ?,
-    @SourceFilePath = ?,
-    @SourceSheetName = ?,
-    @SourceType = ?,
-    @UploadedBy = ?,
-    @ParserVersion = ?,
-    @IntakeNotes = ?;
+    @CustomerName = %s,
+    @QuoteNumber = %s,
+    @SourceFileName = %s,
+    @SourceFilePath = %s,
+    @SourceSheetName = %s,
+    @SourceType = %s,
+    @UploadedBy = %s,
+    @ParserVersion = %s,
+    @IntakeNotes = %s;
 """
         params = tuple(header.get(column) for column in CREATE_HEADER_COLUMNS)
 
         try:
-            cursor.execute(sql, *params)
+            cursor.execute(sql, params)
             result_sets = _fetch_result_sets(cursor)
         except Exception as exc:
             logger.exception("BOM intake create call failed.")
@@ -201,7 +199,7 @@ EXEC dbo.usp_BOM_Intake_Create
         )
 
         try:
-            cursor.execute(sql, *params)
+            cursor.execute(sql, params)
             result_sets = _fetch_result_sets(cursor)
         except Exception as exc:
             logger.exception(
@@ -271,13 +269,15 @@ EXEC dbo.usp_BOM_Intake_Create
 
         sql = f"""
 SET NOCOUNT ON;
+-- pymssql cannot bind SQL Server TVPs directly, so populate table-typed
+-- variables inside the batch and pass those into the existing procedure.
 DECLARE @Roots dbo.udtt_BOM_Intake_Root;
 DECLARE @Rows dbo.udtt_BOM_Intake_Row;
 {root_insert_sql}
 {row_insert_sql}
 EXEC dbo.usp_BOM_Intake_ProcessStandardized
-    @BomIntakeId = ?,
-    @DetectedBy = ?,
+    @BomIntakeId = %s,
+    @DetectedBy = %s,
     @Roots = @Roots,
     @Rows = @Rows;
 """
@@ -295,8 +295,11 @@ def _build_table_insert(
     value_groups: list[str] = []
 
     for row in rows:
-        value_groups.append("(" + ", ".join("?" for _ in columns) + ")")
+        value_groups.append("(" + ", ".join("%s" for _ in columns) + ")")
         params.extend(row.get(column) for column in columns)
+
+    if not value_groups:
+        return "", params
 
     insert_sql = (
         f"INSERT INTO {variable_name} ({', '.join(columns)}) VALUES\n    "
@@ -364,12 +367,12 @@ def _extract_process_results(
     return summary, root_results
 
 
-def _load_pyodbc_connect() -> Callable[..., Any]:
+def _load_pymssql_connect() -> Callable[..., Any]:
     try:
-        import pyodbc  # type: ignore
+        import pymssql  # type: ignore
     except ImportError as exc:
         raise SqlServerConfigError(
-            "pyodbc is required for SQL Server BOM intake connectivity."
+            "pymssql is required for SQL Server BOM intake connectivity."
         ) from exc
 
-    return pyodbc.connect
+    return pymssql.connect

@@ -12,7 +12,7 @@ class FakeCursor:
         self._set_index = 0
         self.description = None
 
-    def execute(self, sql: str, *params: object):
+    def execute(self, sql: str, params: tuple[object, ...] = ()):
         self.executed.append((sql, params))
         execution = self._executions.pop(0)
         self._current_sets = execution["result_sets"]
@@ -49,12 +49,7 @@ class FakeConnection:
         self._cursor = cursor
         self.committed = False
         self.rolled_back = False
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
+        self.closed = False
 
     def cursor(self) -> FakeCursor:
         return self._cursor
@@ -64,6 +59,9 @@ class FakeConnection:
 
     def rollback(self) -> None:
         self.rolled_back = True
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class BomIntakeDbServiceTests(unittest.TestCase):
@@ -117,7 +115,7 @@ class BomIntakeDbServiceTests(unittest.TestCase):
                 username="app_user",
                 password="secret",
             ),
-            connect=lambda *_args, **_kwargs: fake_connection,
+            connect=lambda **_kwargs: fake_connection,
         )
 
         result = service.create_and_process_intake(
@@ -203,8 +201,41 @@ class BomIntakeDbServiceTests(unittest.TestCase):
         self.assertEqual(process_params[-2], 321)
         self.assertEqual(process_params[-1], "estimator")
         self.assertTrue(fake_connection.committed)
+        self.assertTrue(fake_connection.closed)
         self.assertEqual(result["Summary"]["DuplicateRejectedCount"], 1)
         self.assertEqual(len(result["RootResults"]), 2)
+
+    def test_build_connection_kwargs_uses_non_odbc_fields(self) -> None:
+        service = BomIntakeDbService(
+            sql_config=SqlServerConfig(
+                host="sql-host",
+                port=1444,
+                database="Estimating",
+                username="app_user",
+                password="secret",
+                timeout=12,
+                driver="ignored",
+                encrypt="no",
+                trust_server_certificate="no",
+            ),
+            connect=lambda **_kwargs: None,
+        )
+
+        kwargs = service.build_connection_kwargs()
+
+        self.assertEqual(
+            kwargs,
+            {
+                "server": "sql-host",
+                "user": "app_user",
+                "password": "secret",
+                "database": "Estimating",
+                "port": 1444,
+                "timeout": 12,
+                "login_timeout": 12,
+                "autocommit": False,
+            },
+        )
 
 
 if __name__ == "__main__":
