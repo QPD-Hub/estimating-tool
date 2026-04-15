@@ -12,15 +12,16 @@ RUN apt-get update \
         curl \
         ca-certificates \
         gnupg2 \
+        apt-transport-https \
         unixodbc \
         unixodbc-dev \
+        libgssapi-krb5-2 \
     && curl -sSL -O https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb \
     && dpkg -i packages-microsoft-prod.deb \
-    && rm packages-microsoft-prod.deb \
-    && mkdir -p /opt/microsoft/msodbcsql18 \
-    && touch /opt/microsoft/msodbcsql18/ACCEPT_EULA \
+    && rm -f packages-microsoft-prod.deb \
     && apt-get update \
-    && apt-get install -y --no-install-recommends msodbcsql18 \
+    && echo "msodbcsql18 msodbcsql/ACCEPT_EULA boolean true" | debconf-set-selections \
+    && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir -r requirements.txt
