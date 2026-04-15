@@ -144,6 +144,8 @@ class BomIntakeDbService:
 
     def _create_intake(self, cursor: Any, header: dict[str, object]) -> int:
         sql = """
+SET NOCOUNT ON;
+DECLARE @BomIntakeId BIGINT;
 EXEC dbo.usp_BOM_Intake_Create
     @CustomerName = %s,
     @QuoteNumber = %s,
@@ -153,7 +155,9 @@ EXEC dbo.usp_BOM_Intake_Create
     @SourceType = %s,
     @UploadedBy = %s,
     @ParserVersion = %s,
-    @IntakeNotes = %s;
+    @IntakeNotes = %s,
+    @BomIntakeId = @BomIntakeId OUTPUT;
+SELECT @BomIntakeId AS BomIntakeId;
 """
         params = tuple(header.get(column) for column in CREATE_HEADER_COLUMNS)
 
@@ -166,7 +170,10 @@ EXEC dbo.usp_BOM_Intake_Create
                 "dbo.usp_BOM_Intake_Create failed."
             ) from exc
 
-        bom_intake_id = _extract_bom_intake_id(result_sets)
+        bom_intake_id = _extract_bom_intake_id(
+            result_sets,
+            prefer_explicit_bom_intake_id_result=True,
+        )
         if bom_intake_id is None:
             raise BomIntakeDbProcedureError(
                 "dbo.usp_BOM_Intake_Create did not return a BomIntakeId."
@@ -327,7 +334,22 @@ def _fetch_result_sets(cursor: Any) -> list[list[dict[str, object]]]:
 
 def _extract_bom_intake_id(
     result_sets: Sequence[Sequence[dict[str, object]]],
+    *,
+    prefer_explicit_bom_intake_id_result: bool = False,
 ) -> int | None:
+    if prefer_explicit_bom_intake_id_result:
+        for result_set in reversed(result_sets):
+            if len(result_set) != 1:
+                continue
+
+            row = result_set[0]
+            if set(row.keys()) != {"BomIntakeId"}:
+                continue
+
+            bom_intake_id = row.get("BomIntakeId")
+            if bom_intake_id is not None:
+                return int(bom_intake_id)
+
     for result_set in result_sets:
         for row in result_set:
             if "BomIntakeId" in row and row["BomIntakeId"] is not None:

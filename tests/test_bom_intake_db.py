@@ -205,6 +205,49 @@ class BomIntakeDbServiceTests(unittest.TestCase):
         self.assertEqual(result["Summary"]["DuplicateRejectedCount"], 1)
         self.assertEqual(len(result["RootResults"]), 2)
 
+    def test_create_intake_prefers_explicit_output_select_over_proc_result_sets(self) -> None:
+        fake_cursor = FakeCursor(
+            executions=[
+                {
+                    "result_sets": [
+                        [{"Status": "created"}],
+                        [{"BomIntakeId": 999, "Message": "intermediate"}],
+                        [{"BomIntakeId": 321}],
+                    ]
+                }
+            ]
+        )
+        service = BomIntakeDbService(
+            sql_config=SqlServerConfig(
+                host="sql-host",
+                username="app_user",
+                password="secret",
+            ),
+            connect=lambda **_kwargs: None,
+        )
+
+        bom_intake_id = service._create_intake(
+            fake_cursor,
+            {
+                "CustomerName": "ACME",
+                "QuoteNumber": "Q-1",
+                "SourceFileName": "bom.xlsx",
+                "SourceFilePath": "/tmp/bom.xlsx",
+                "SourceSheetName": "BOM",
+                "SourceType": "standardized_upload",
+                "UploadedBy": "estimator",
+                "ParserVersion": "v1",
+                "IntakeNotes": "notes",
+            },
+        )
+
+        create_sql, _create_params = fake_cursor.executed[0]
+
+        self.assertIn("DECLARE @BomIntakeId BIGINT;", create_sql)
+        self.assertIn("@BomIntakeId = @BomIntakeId OUTPUT", create_sql)
+        self.assertIn("SELECT @BomIntakeId AS BomIntakeId;", create_sql)
+        self.assertEqual(bom_intake_id, 321)
+
     def test_build_connection_kwargs_uses_non_odbc_fields(self) -> None:
         service = BomIntakeDbService(
             sql_config=SqlServerConfig(
