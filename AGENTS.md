@@ -52,7 +52,7 @@ When making changes in this repository:
 
 4\. Track workflow state, not “correctness.”
 
-5\. Everything must be visible and traceable
+5\. Everything must be visible and traceable.
 
 
 
