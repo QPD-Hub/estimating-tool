@@ -2,13 +2,25 @@ from __future__ import annotations
 
 import cgi
 import html
+import json
 import logging
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from pathlib import Path
 from typing import Callable
 
-from src.config import AppConfig
+from src.config import AppConfig, SqlServerConfig, SqlServerConfigError
+from src.services.bom_intake_db import (
+    BomIntakeDbConnectionError,
+    BomIntakeDbError,
+    BomIntakeDbProcedureError,
+    BomIntakeDbService,
+)
+from src.services.bom_intake_payload import BomIntakePayloadError
+from src.services.bom_intake_service import (
+    BomIntakeRequestError,
+    BomIntakeService,
+)
 from src.services.document_intake_service import (
     DocumentIntakeError,
     DocumentIntakeResult,
@@ -32,11 +44,15 @@ class ViewState:
     result: DocumentIntakeResult | None = None
 
 
-def create_app(config: AppConfig) -> Callable:
+def create_app(
+    config: AppConfig,
+    bom_intake_service_override: BomIntakeService | None = None,
+) -> Callable:
     service = DocumentIntakeService(
         automation_drop_root=config.automation_drop_root,
         work_root=config.work_root,
     )
+    bom_intake_service: BomIntakeService | None = bom_intake_service_override
 
     def app(environ, start_response):
         method = environ.get("REQUEST_METHOD", "GET").upper()
@@ -46,6 +62,11 @@ def create_app(config: AppConfig) -> Callable:
             return _respond_html(start_response, render_page(config, ViewState()))
         if path == "/" and method == "POST":
             return _handle_upload(environ, start_response, config, service)
+        if path == "/api/dev/bom-intake" and method == "POST":
+            nonlocal bom_intake_service
+            if bom_intake_service is None:
+                bom_intake_service = _build_bom_intake_service()
+            return _handle_bom_intake_api(environ, start_response, bom_intake_service)
 
         start_response(
             f"{HTTPStatus.NOT_FOUND.value} {HTTPStatus.NOT_FOUND.phrase}",
@@ -140,6 +161,148 @@ def _respond_html(start_response, page: str, status: HTTPStatus = HTTPStatus.OK)
         ],
     )
     return [body]
+
+
+def _respond_json(
+    start_response,
+    payload: dict[str, object],
+    status: HTTPStatus = HTTPStatus.OK,
+):
+    body = json.dumps(payload).encode("utf-8")
+    start_response(
+        f"{status.value} {status.phrase}",
+        [
+            ("Content-Type", "application/json; charset=utf-8"),
+            ("Content-Length", str(len(body))),
+        ],
+    )
+    return [body]
+
+
+def _build_bom_intake_service() -> BomIntakeService:
+    sql_config = SqlServerConfig.load()
+    db_service = BomIntakeDbService(sql_config=sql_config)
+    return BomIntakeService(db_service=db_service)
+
+
+def _handle_bom_intake_api(
+    environ,
+    start_response,
+    service: BomIntakeService,
+):
+    try:
+        request_body = _parse_json_request(environ)
+        header = request_body.get("header")
+        standardized_bom_rows = request_body.get("standardizedBomRows")
+
+        result = service.process_standardized_upload(
+            header_data=header,
+            standardized_rows_data=standardized_bom_rows,
+        )
+        return _respond_json(
+            start_response,
+            _serialize_bom_intake_result(result),
+            status=HTTPStatus.OK,
+        )
+    except ValueError as exc:
+        if isinstance(
+            exc,
+            (
+                BomIntakeRequestError,
+                BomIntakePayloadError,
+            ),
+        ):
+            logger.warning("BOM intake request validation failed: %s", exc)
+            return _respond_json(
+                start_response,
+                {"error": str(exc)},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+        if isinstance(exc, SqlServerConfigError):
+            logger.error("BOM intake SQL configuration failed: %s", exc)
+            return _respond_json(
+                start_response,
+                {"error": str(exc)},
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+        logger.warning("BOM intake request parsing failed: %s", exc)
+        return _respond_json(
+            start_response,
+            {"error": str(exc)},
+            status=HTTPStatus.BAD_REQUEST,
+        )
+    except BomIntakeDbConnectionError as exc:
+        return _respond_json(
+            start_response,
+            {"error": str(exc)},
+            status=HTTPStatus.BAD_GATEWAY,
+        )
+    except (BomIntakeDbProcedureError, BomIntakeDbError) as exc:
+        return _respond_json(
+            start_response,
+            {"error": str(exc)},
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+    except Exception:
+        logger.exception("Unexpected BOM intake API error.")
+        return _respond_json(
+            start_response,
+            {"error": "Unexpected server error while processing BOM intake."},
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+
+
+def _parse_json_request(environ) -> dict[str, object]:
+    try:
+        content_length = int(environ.get("CONTENT_LENGTH", "0") or "0")
+    except ValueError as exc:
+        raise ValueError("Invalid Content-Length header.") from exc
+
+    body = environ["wsgi.input"].read(content_length) if content_length > 0 else b""
+    if not body:
+        raise ValueError("Request body is required.")
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Request body must be valid JSON.") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError("Request body must be a JSON object.")
+    return payload
+
+
+def _serialize_bom_intake_result(result: dict[str, object]) -> dict[str, object]:
+    summary = result.get("Summary", {})
+    root_results = result.get("RootResults", [])
+    if not isinstance(summary, dict):
+        summary = {}
+    if not isinstance(root_results, list):
+        root_results = []
+
+    return {
+        "summary": {
+            "bomIntakeId": summary.get("BomIntakeId"),
+            "detectedRootCount": summary.get("DetectedRootCount"),
+            "acceptedRootCount": summary.get("AcceptedRootCount"),
+            "duplicateRejectedCount": summary.get("DuplicateRejectedCount"),
+            "finalIntakeStatus": summary.get("FinalIntakeStatus"),
+        },
+        "rootResults": [
+            {
+                "rootClientId": root_result.get("RootClientId"),
+                "rootSequence": root_result.get("RootSequence"),
+                "customerName": root_result.get("CustomerName"),
+                "level0PartNumber": root_result.get("Level0PartNumber"),
+                "revision": root_result.get("Revision"),
+                "decisionStatus": root_result.get("DecisionStatus"),
+                "decisionReason": root_result.get("DecisionReason"),
+                "bomRootId": root_result.get("BomRootId"),
+                "existingBomRootId": root_result.get("ExistingBomRootId"),
+            }
+            for root_result in root_results
+        ],
+    }
 
 
 def _group_processed_files_by_type(
