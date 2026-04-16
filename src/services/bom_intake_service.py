@@ -76,7 +76,14 @@ class BomIntakeServiceError(ValueError):
 
 
 class BomIntakeRequestError(BomIntakeServiceError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostics: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.diagnostics = diagnostics
 
 
 @dataclass(frozen=True)
@@ -89,10 +96,11 @@ class BomIntakePreview:
     row_count: int
     standardized_rows: list[StandardizedBomRow]
     payload: BomIntakePayload
+    diagnostics: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
         preview_payload = self.payload.to_preview_dict()
-        return {
+        response = {
             "selectedFileName": self.selected_file_name,
             "detectedWorksheet": self.detected_worksheet,
             "detectedSourceType": self.detected_source_type,
@@ -128,6 +136,9 @@ class BomIntakePreview:
             "rootsTvpRows": preview_payload["processStandardizedProc"]["roots"],
             "bomRowsTvpRows": preview_payload["processStandardizedProc"]["rows"],
         }
+        if self.diagnostics is not None:
+            response["diagnostics"] = self.diagnostics
+        return response
 
 
 class BomIntakeService:
@@ -255,7 +266,24 @@ class BomIntakeService:
             BomStandardizerError,
             BomIntakePayloadError,
         ) as exc:
-            raise BomIntakeRequestError(str(exc)) from exc
+            raise BomIntakeRequestError(
+                str(exc),
+                diagnostics=self._preview_diagnostics(
+                    metadata=metadata,
+                    package_diagnostics=getattr(
+                        locals().get("located", None),
+                        "diagnostics",
+                        None,
+                    )
+                    or getattr(exc, "diagnostics", None),
+                    parse_diagnostics=getattr(
+                        locals().get("parsed", None),
+                        "diagnostics",
+                        None,
+                    )
+                    or getattr(exc, "diagnostics", None),
+                ),
+            ) from exc
 
         return BomIntakePreview(
             selected_file_name=located.filename,
@@ -266,7 +294,51 @@ class BomIntakeService:
             row_count=len(payload.rows),
             standardized_rows=standardized.rows,
             payload=payload,
+            diagnostics=self._preview_diagnostics(
+                metadata=metadata,
+                package_diagnostics=located.diagnostics,
+                parse_diagnostics=parsed.diagnostics,
+            ),
         )
+
+    def _preview_diagnostics(
+        self,
+        *,
+        metadata: BomIntakeMetadata,
+        package_diagnostics,
+        parse_diagnostics,
+    ) -> dict[str, object]:
+        diagnostics: dict[str, object] = {
+            "selectedSourceFileName": metadata.source_file_name,
+            "selectedArchiveMemberName": None,
+            "candidateSpreadsheets": [],
+            "archiveSelection": None,
+            "selectedWorksheetName": None,
+            "worksheetNames": [],
+            "firstRowsPreview": [],
+            "headerRowCandidates": [],
+            "worksheets": [],
+        }
+
+        if package_diagnostics is not None:
+            package_dict = package_diagnostics.to_dict()
+            diagnostics["selectedSourceFileName"] = package_dict["sourceFileName"]
+            diagnostics["selectedArchiveMemberName"] = package_dict["selectedArchiveMemberName"]
+            diagnostics["candidateSpreadsheets"] = package_dict["candidateSpreadsheets"]
+            diagnostics["archiveSelection"] = {
+                "selectedSpreadsheetFilename": package_dict["selectedSpreadsheetFilename"],
+                "selectionReason": package_dict["selectionReason"],
+            }
+
+        if parse_diagnostics is not None:
+            parse_dict = parse_diagnostics.to_dict()
+            diagnostics["selectedWorksheetName"] = parse_dict["selectedWorksheetName"]
+            diagnostics["worksheetNames"] = parse_dict["worksheetNames"]
+            diagnostics["firstRowsPreview"] = parse_dict["firstRowsPreview"]
+            diagnostics["headerRowCandidates"] = parse_dict["headerRowCandidates"]
+            diagnostics["worksheets"] = parse_dict["worksheets"]
+
+        return diagnostics
 
     def build_standardized_payload(
         self,

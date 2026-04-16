@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from io import BytesIO
@@ -38,9 +39,18 @@ CANONICAL_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 
 WORKSHEET_NAME_KEYWORDS = ("bom", "bill", "parts", "assembly")
 
+logger = logging.getLogger(__name__)
+
 
 class BomSpreadsheetParserError(ValueError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostics: BomSpreadsheetParseDiagnostics | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.diagnostics = diagnostics
 
 
 @dataclass(frozen=True)
@@ -62,6 +72,69 @@ class ParsedBomSpreadsheet:
     header_row_number: int
     columns: list[ParsedBomColumn]
     rows: list[ParsedBomRow]
+    diagnostics: BomSpreadsheetParseDiagnostics | None = None
+
+
+@dataclass(frozen=True)
+class HeaderRowCandidateDiagnostic:
+    row_number: int
+    score: int
+    normalized_headers: list[str]
+    matched_fields: dict[str, int]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "rowNumber": self.row_number,
+            "score": self.score,
+            "normalizedHeaders": self.normalized_headers,
+            "matchedFields": self.matched_fields,
+        }
+
+
+@dataclass(frozen=True)
+class WorksheetDiagnostic:
+    sheet_name: str
+    worksheet_name_score: int
+    row_count: int
+    first_rows: list[list[object]]
+    header_candidates: list[HeaderRowCandidateDiagnostic]
+    selected: bool = False
+    selected_header_row_number: int | None = None
+    selected_total_score: int | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "sheetName": self.sheet_name,
+            "worksheetNameScore": self.worksheet_name_score,
+            "rowCount": self.row_count,
+            "firstRows": self.first_rows,
+            "headerCandidates": [
+                candidate.to_dict() for candidate in self.header_candidates
+            ],
+            "selected": self.selected,
+            "selectedHeaderRowNumber": self.selected_header_row_number,
+            "selectedTotalScore": self.selected_total_score,
+        }
+
+
+@dataclass(frozen=True)
+class BomSpreadsheetParseDiagnostics:
+    selected_worksheet_name: str | None
+    worksheet_names: list[str]
+    first_rows_preview: list[list[object]]
+    header_row_candidates: list[HeaderRowCandidateDiagnostic]
+    worksheets: list[WorksheetDiagnostic]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "selectedWorksheetName": self.selected_worksheet_name,
+            "worksheetNames": self.worksheet_names,
+            "firstRowsPreview": self.first_rows_preview,
+            "headerRowCandidates": [
+                candidate.to_dict() for candidate in self.header_row_candidates
+            ],
+            "worksheets": [worksheet.to_dict() for worksheet in self.worksheets],
+        }
 
 
 class BomSpreadsheetParser:
@@ -120,25 +193,153 @@ class BomSpreadsheetParser:
 def _select_and_parse_sheet(
     worksheets: list[tuple[str, list[tuple[object, ...]]]],
 ) -> ParsedBomSpreadsheet:
-    best_candidate: tuple[int, int, str, int, dict[str, int], list[tuple[object, ...]]] | None = None
+    best_candidate: tuple[
+        int,
+        int,
+        str,
+        int,
+        dict[str, int],
+        list[tuple[object, ...]],
+        list[HeaderRowCandidateDiagnostic],
+    ] | None = None
+    worksheet_diagnostics: list[WorksheetDiagnostic] = []
 
     for sheet_name, rows in worksheets:
-        if not rows:
-            continue
-
-        header_row_number, column_map, score = _detect_header_row(rows)
         name_score = sum(
             3 for keyword in WORKSHEET_NAME_KEYWORDS if keyword in sheet_name.lower()
         )
-        candidate = (score + name_score, name_score, sheet_name, header_row_number, column_map, rows)
+        if not rows:
+            worksheet_diagnostics.append(
+                WorksheetDiagnostic(
+                    sheet_name=sheet_name,
+                    worksheet_name_score=name_score,
+                    row_count=0,
+                    first_rows=[],
+                    header_candidates=[],
+                )
+            )
+            continue
+
+        try:
+            header_row_number, column_map, score, header_candidates = _detect_header_row(rows)
+        except BomSpreadsheetParserError as exc:
+            header_candidates = []
+            if exc.diagnostics is not None:
+                header_candidates = exc.diagnostics.header_row_candidates
+            worksheet_diagnostics.append(
+                WorksheetDiagnostic(
+                    sheet_name=sheet_name,
+                    worksheet_name_score=name_score,
+                    row_count=len(rows),
+                    first_rows=_rows_preview(rows),
+                    header_candidates=header_candidates,
+                )
+            )
+            continue
+        worksheet_diagnostics.append(
+            WorksheetDiagnostic(
+                sheet_name=sheet_name,
+                worksheet_name_score=name_score,
+                row_count=len(rows),
+                first_rows=_rows_preview(rows),
+                header_candidates=header_candidates,
+            )
+        )
+        candidate = (
+            score + name_score,
+            name_score,
+            sheet_name,
+            header_row_number,
+            column_map,
+            rows,
+            header_candidates,
+        )
 
         if best_candidate is None or candidate[:2] > best_candidate[:2]:
             best_candidate = candidate
 
     if best_candidate is None or best_candidate[0] <= 0:
-        raise BomSpreadsheetParserError("No BOM worksheet/header could be detected.")
+        fallback_worksheet = _select_fallback_worksheet(worksheet_diagnostics)
+        diagnostics = BomSpreadsheetParseDiagnostics(
+            selected_worksheet_name=(
+                None if fallback_worksheet is None else fallback_worksheet.sheet_name
+            ),
+            worksheet_names=[sheet_name for sheet_name, _rows in worksheets],
+            first_rows_preview=(
+                [] if fallback_worksheet is None else fallback_worksheet.first_rows
+            ),
+            header_row_candidates=(
+                [] if fallback_worksheet is None else fallback_worksheet.header_candidates
+            ),
+            worksheets=[
+                WorksheetDiagnostic(
+                    sheet_name=worksheet.sheet_name,
+                    worksheet_name_score=worksheet.worksheet_name_score,
+                    row_count=worksheet.row_count,
+                    first_rows=worksheet.first_rows,
+                    header_candidates=worksheet.header_candidates,
+                    selected=(
+                        fallback_worksheet is not None
+                        and worksheet.sheet_name == fallback_worksheet.sheet_name
+                    ),
+                )
+                for worksheet in worksheet_diagnostics
+            ],
+        )
+        logger.warning(
+            "No BOM worksheet/header detected. Worksheet diagnostics: %s",
+            [worksheet.to_dict() for worksheet in diagnostics.worksheets],
+        )
+        raise BomSpreadsheetParserError(
+            "No BOM worksheet/header could be detected.",
+            diagnostics=diagnostics,
+        )
 
-    _score, _name_score, sheet_name, header_row_number, column_map, rows = best_candidate
+    (
+        total_score,
+        _name_score,
+        sheet_name,
+        header_row_number,
+        column_map,
+        rows,
+        header_candidates,
+    ) = best_candidate
+    diagnostics = BomSpreadsheetParseDiagnostics(
+        selected_worksheet_name=sheet_name,
+        worksheet_names=[sheet_name for sheet_name, _rows in worksheets],
+        first_rows_preview=_rows_preview(rows),
+        header_row_candidates=header_candidates,
+        worksheets=[
+            WorksheetDiagnostic(
+                sheet_name=worksheet.sheet_name,
+                worksheet_name_score=worksheet.worksheet_name_score,
+                row_count=worksheet.row_count,
+                first_rows=worksheet.first_rows,
+                header_candidates=worksheet.header_candidates,
+                selected=worksheet.sheet_name == sheet_name,
+                selected_header_row_number=header_row_number
+                if worksheet.sheet_name == sheet_name
+                else None,
+                selected_total_score=total_score
+                if worksheet.sheet_name == sheet_name
+                else None,
+            )
+            for worksheet in worksheet_diagnostics
+        ],
+    )
+    logger.info("Selected worksheet '%s' for BOM parsing.", sheet_name)
+    logger.info(
+        "Header detection candidates for worksheet '%s': %s",
+        sheet_name,
+        [
+            {
+                "row": candidate.row_number,
+                "score": candidate.score,
+                "normalized_headers": candidate.normalized_headers,
+            }
+            for candidate in header_candidates
+        ],
+    )
     parsed_columns = [
         ParsedBomColumn(
             canonical_field=canonical_field,
@@ -166,7 +367,8 @@ def _select_and_parse_sheet(
 
     if not parsed_rows:
         raise BomSpreadsheetParserError(
-            f"Worksheet '{sheet_name}' did not contain any BOM data rows."
+            f"Worksheet '{sheet_name}' did not contain any BOM data rows.",
+            diagnostics=diagnostics,
         )
 
     return ParsedBomSpreadsheet(
@@ -174,20 +376,22 @@ def _select_and_parse_sheet(
         header_row_number=header_row_number,
         columns=parsed_columns,
         rows=parsed_rows,
+        diagnostics=diagnostics,
     )
 
 
 def _detect_header_row(
     rows: list[tuple[object, ...]],
-) -> tuple[int, dict[str, int], int]:
+) -> tuple[int, dict[str, int], int, list[HeaderRowCandidateDiagnostic]]:
     best: tuple[int, dict[str, int], int] | None = None
+    candidates: list[HeaderRowCandidateDiagnostic] = []
 
     for row_number, row in enumerate(rows[:25], start=1):
         header_map: dict[str, int] = {}
         score = 0
+        normalized_headers = [_normalize_header_name(value) for value in row]
 
-        for column_index, value in enumerate(row):
-            normalized_value = _normalize_header_name(value)
+        for column_index, normalized_value in enumerate(normalized_headers):
             if not normalized_value:
                 continue
 
@@ -196,6 +400,16 @@ def _detect_header_row(
                     header_map[canonical_field] = column_index
                     score += 2 if canonical_field in {"part_number", "bom_level", "description"} else 1
                     break
+
+        if header_map:
+            candidates.append(
+                HeaderRowCandidateDiagnostic(
+                    row_number=row_number,
+                    score=score,
+                    normalized_headers=[value for value in normalized_headers if value],
+                    matched_fields=header_map,
+                )
+            )
 
         if "bom_level" not in header_map:
             continue
@@ -208,9 +422,21 @@ def _detect_header_row(
             best = (row_number, header_map, score)
 
     if best is None:
-        raise BomSpreadsheetParserError("No BOM header row could be detected.")
+        raise BomSpreadsheetParserError(
+            "No BOM header row could be detected.",
+            diagnostics=BomSpreadsheetParseDiagnostics(
+                selected_worksheet_name=None,
+                worksheet_names=[],
+                first_rows_preview=_rows_preview(rows),
+                header_row_candidates=candidates,
+                worksheets=[],
+            ),
+        )
 
-    return best
+    return best[0], best[1], best[2], sorted(
+        candidates,
+        key=lambda candidate: (-candidate.score, candidate.row_number),
+    )
 
 
 def _normalize_header_name(value: object) -> str:
@@ -229,6 +455,28 @@ def _stringify_cell(value: object) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _rows_preview(rows: list[tuple[object, ...]]) -> list[list[object]]:
+    return [list(row) for row in rows[:10]]
+
+
+def _select_fallback_worksheet(
+    worksheet_diagnostics: list[WorksheetDiagnostic],
+) -> WorksheetDiagnostic | None:
+    if not worksheet_diagnostics:
+        return None
+    return sorted(
+        worksheet_diagnostics,
+        key=lambda worksheet: (
+            -max(
+                (candidate.score for candidate in worksheet.header_candidates),
+                default=0,
+            ),
+            -worksheet.worksheet_name_score,
+            worksheet.sheet_name.lower(),
+        ),
+    )[0]
 
 
 def _suffix(filename: str) -> str:

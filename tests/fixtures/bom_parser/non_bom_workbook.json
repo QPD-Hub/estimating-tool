@@ -1,0 +1,13 @@
+{
+  "sheets": [
+    {
+      "name": "Reference",
+      "rows": [
+        ["Customer Notes"],
+        ["Document", "Owner", "Status"],
+        ["readme.txt", "Estimator", "Ready"],
+        ["spec.pdf", "Buyer", "Approved"]
+      ]
+    }
+  ]
+}

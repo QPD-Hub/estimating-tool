@@ -23,7 +23,7 @@ sys.modules.setdefault("openpyxl.utils.exceptions", openpyxl_utils_exceptions_mo
 sys.modules.setdefault("xlrd", xlrd_module)
 
 from src.config import AppConfig
-from src.services.bom_intake_service import BomIntakeService
+from src.services.bom_intake_service import BomIntakeRequestError, BomIntakeService
 from src.web import create_app
 
 
@@ -45,6 +45,17 @@ class FakeBomIntakeService:
                 "detectedWorksheet": "BOM",
                 "detectedSourceType": "spreadsheet_upload",
                 "sourceFilePath": None,
+                "diagnostics": {
+                    "selectedSourceFileName": "bom.xlsx",
+                    "selectedArchiveMemberName": None,
+                    "candidateSpreadsheets": [],
+                    "archiveSelection": None,
+                    "selectedWorksheetName": "BOM",
+                    "worksheetNames": ["BOM"],
+                    "firstRowsPreview": [["Part Number", "Description", "Level"]],
+                    "headerRowCandidates": [{"rowNumber": 1, "score": 6}],
+                    "worksheets": [],
+                },
                 "rootCount": 1,
                 "rowCount": 2,
                 "standardizedRows": [
@@ -135,6 +146,52 @@ class FakeBomIntakeService:
             },
             "RootResults": [],
         }
+
+
+class FailingPreviewBomIntakeService(FakeBomIntakeService):
+    def preview_uploaded_bom(self, *, header_data, upload_data):
+        raise BomIntakeRequestError(
+            "No BOM header row could be detected.",
+            diagnostics={
+                "selectedSourceFileName": "package.zip",
+                "selectedArchiveMemberName": "docs/reference.xlsx",
+                "candidateSpreadsheets": [
+                    {
+                        "filename": "reference.xlsx",
+                        "memberName": "docs/reference.xlsx",
+                        "score": 5,
+                        "reasons": ["prefers .xlsx"],
+                        "selected": True,
+                    },
+                    {
+                        "filename": "notes.xlsx",
+                        "memberName": "docs/notes.xlsx",
+                        "score": 5,
+                        "reasons": ["prefers .xlsx"],
+                        "selected": False,
+                    },
+                ],
+                "archiveSelection": {
+                    "selectedSpreadsheetFilename": "reference.xlsx",
+                    "selectionReason": "Selected highest-ranked spreadsheet candidate (score=5; prefers .xlsx).",
+                },
+                "selectedWorksheetName": "Sheet1",
+                "worksheetNames": ["Sheet1", "Summary"],
+                "firstRowsPreview": [
+                    ["Header A", "Header B"],
+                    ["1", "2"],
+                ],
+                "headerRowCandidates": [
+                    {
+                        "rowNumber": 2,
+                        "score": 1,
+                        "normalizedHeaders": ["header a", "header b"],
+                        "matchedFields": {"description": 1},
+                    }
+                ],
+                "worksheets": [],
+            },
+        )
 
 
 class FakeDbService:
@@ -365,6 +422,38 @@ class WebBomIntakeApiTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["bomIntakeId"], 654)
         self.assertIn("upload_data", fake_service.calls[0])
 
+    def test_multipart_preview_endpoint_returns_diagnostics_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                bom_intake_service_override=FailingPreviewBomIntakeService(),
+            )
+
+            status, headers, body = _invoke_multipart(
+                app,
+                "/api/dev/bom-intake/preview",
+                fields={
+                    "customer_name": "ACME",
+                    "uploaded_by": "estimator",
+                },
+                file_field_name="bom_file",
+                filename="package.zip",
+                content=b"zip bytes",
+            )
+
+        self.assertEqual(status, "400 Bad Request")
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        payload = json.loads(body)
+        self.assertEqual(payload["error"], "No BOM header row could be detected.")
+        self.assertEqual(payload["diagnostics"]["selectedArchiveMemberName"], "docs/reference.xlsx")
+        self.assertEqual(payload["diagnostics"]["selectedWorksheetName"], "Sheet1")
+        self.assertEqual(len(payload["diagnostics"]["candidateSpreadsheets"]), 2)
+
     def test_root_page_renders_bom_upload_ui(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             app = create_app(
@@ -384,6 +473,7 @@ class WebBomIntakeApiTests(unittest.TestCase):
         self.assertIn("BOM Upload And Intake", body)
         self.assertIn('id="preview-button"', body)
         self.assertIn("/api/dev/bom-intake/preview", body)
+        self.assertIn('id="bom-debug"', body)
 
 
 def _invoke_json(app, path: str, payload: dict[str, object]):

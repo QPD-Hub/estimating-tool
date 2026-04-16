@@ -334,9 +334,13 @@ def _handle_bom_request_value_error(start_response, exc: ValueError):
         ),
     ):
         logger.warning("BOM intake request validation failed: %s", exc)
+        payload: dict[str, object] = {"error": str(exc)}
+        diagnostics = getattr(exc, "diagnostics", None)
+        if diagnostics is not None:
+            payload["diagnostics"] = diagnostics
         return _respond_json(
             start_response,
-            {"error": str(exc)},
+            payload,
             status=HTTPStatus.BAD_REQUEST,
         )
     if isinstance(exc, SqlServerConfigError):
@@ -951,6 +955,34 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
 
       <section id="bom-error" class="callout error hidden" aria-live="polite"></section>
 
+      <section id="bom-debug" class="stack hidden" aria-live="polite">
+        <div class="callout">
+          <h3>Preview Diagnostics</h3>
+          <p>This temporary debug panel shows package selection, worksheet selection, and header detection details from the current preview attempt.</p>
+        </div>
+        <dl class="summary-grid" id="debug-summary"></dl>
+        <details open>
+          <summary>Candidate Spreadsheets</summary>
+          <textarea id="debug-candidate-spreadsheets-json" class="json-viewer" readonly></textarea>
+        </details>
+        <details>
+          <summary>Worksheet Diagnostics</summary>
+          <textarea id="debug-worksheets-json" class="json-viewer" readonly></textarea>
+        </details>
+        <details>
+          <summary>Header Candidate Rows</summary>
+          <textarea id="debug-header-candidates-json" class="json-viewer" readonly></textarea>
+        </details>
+        <details>
+          <summary>First Rows Preview</summary>
+          <textarea id="debug-first-rows-json" class="json-viewer" readonly></textarea>
+        </details>
+        <details id="debug-error-details" class="hidden">
+          <summary>Diagnostic Error Details</summary>
+          <textarea id="debug-error-json" class="json-viewer" readonly></textarea>
+        </details>
+      </section>
+
       <section id="bom-preview" class="stack hidden" aria-live="polite">
         <div class="callout success">
           <h3>Preview Ready</h3>
@@ -1068,9 +1100,11 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
     const processButton = document.getElementById("process-button");
     const bomStatus = document.getElementById("bom-status");
     const bomError = document.getElementById("bom-error");
+    const bomDebug = document.getElementById("bom-debug");
     const bomPreview = document.getElementById("bom-preview");
     const bomProcessResult = document.getElementById("bom-process-result");
     const previewSummary = document.getElementById("preview-summary");
+    const debugSummary = document.getElementById("debug-summary");
     const processSummary = document.getElementById("process-summary");
     const standardizedRowsTableBody = document.querySelector("#standardized-rows-table tbody");
     const rootResultsTableBody = document.querySelector("#root-results-table tbody");
@@ -1079,6 +1113,12 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
     const processProcJson = document.getElementById("process-proc-json");
     const rootsJson = document.getElementById("roots-json");
     const bomRowsJson = document.getElementById("bom-rows-json");
+    const debugCandidateSpreadsheetsJson = document.getElementById("debug-candidate-spreadsheets-json");
+    const debugWorksheetsJson = document.getElementById("debug-worksheets-json");
+    const debugHeaderCandidatesJson = document.getElementById("debug-header-candidates-json");
+    const debugFirstRowsJson = document.getElementById("debug-first-rows-json");
+    const debugErrorDetails = document.getElementById("debug-error-details");
+    const debugErrorJson = document.getElementById("debug-error-json");
 
     function setBusy(isBusy, message) {{
       previewButton.disabled = isBusy;
@@ -1106,6 +1146,25 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       bomProcessResult.classList.add("hidden");
       processSummary.innerHTML = "";
       rootResultsTableBody.innerHTML = "";
+    }}
+
+    function clearPreviewDebug() {{
+      bomPreview.classList.add("hidden");
+      bomDebug.classList.add("hidden");
+      previewSummary.innerHTML = "";
+      debugSummary.innerHTML = "";
+      standardizedRowsTableBody.innerHTML = "";
+      standardizedRowsJson.value = "";
+      createProcJson.value = "";
+      processProcJson.value = "";
+      rootsJson.value = "";
+      bomRowsJson.value = "";
+      debugCandidateSpreadsheetsJson.value = "";
+      debugWorksheetsJson.value = "";
+      debugHeaderCandidatesJson.value = "";
+      debugFirstRowsJson.value = "";
+      debugErrorJson.value = "";
+      debugErrorDetails.classList.add("hidden");
     }}
 
     function validateBomForm() {{
@@ -1171,6 +1230,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       bomRowsJson.value = formatJson(preview.bomRowsTvpRows || []);
 
       bomPreview.classList.remove("hidden");
+      renderDiagnostics(preview.diagnostics || null);
     }}
 
     function renderProcessResult(result) {{
@@ -1204,6 +1264,46 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       return JSON.stringify(value, null, 2);
     }}
 
+    function renderDiagnostics(diagnostics, errorMessage = "") {{
+      if (!diagnostics) {{
+        bomDebug.classList.add("hidden");
+        debugSummary.innerHTML = "";
+        debugCandidateSpreadsheetsJson.value = "";
+        debugWorksheetsJson.value = "";
+        debugHeaderCandidatesJson.value = "";
+        debugFirstRowsJson.value = "";
+        debugErrorJson.value = "";
+        debugErrorDetails.classList.add("hidden");
+        return;
+      }}
+
+      renderSummaryList(debugSummary, [
+        ["Selected File", diagnostics.selectedSourceFileName || ""],
+        ["Selected Archive Member", diagnostics.selectedArchiveMemberName || ""],
+        ["Selected Worksheet", diagnostics.selectedWorksheetName || ""],
+        ["Worksheet Names", (diagnostics.worksheetNames || []).join(", ")],
+        ["Archive Selection Reason", diagnostics.archiveSelection?.selectionReason || ""]
+      ]);
+
+      debugCandidateSpreadsheetsJson.value = formatJson(diagnostics.candidateSpreadsheets || []);
+      debugWorksheetsJson.value = formatJson(diagnostics.worksheets || []);
+      debugHeaderCandidatesJson.value = formatJson(diagnostics.headerRowCandidates || []);
+      debugFirstRowsJson.value = formatJson(diagnostics.firstRowsPreview || []);
+
+      if (errorMessage) {{
+        debugErrorJson.value = formatJson({{
+          error: errorMessage,
+          diagnostics
+        }});
+        debugErrorDetails.classList.remove("hidden");
+      }} else {{
+        debugErrorJson.value = "";
+        debugErrorDetails.classList.add("hidden");
+      }}
+
+      bomDebug.classList.remove("hidden");
+    }}
+
     function escapeHtml(value) {{
       return String(value)
         .replaceAll("&", "&amp;")
@@ -1215,6 +1315,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
 
     async function runBomAction(action) {{
       hideBomError();
+      clearPreviewDebug();
       if (action === "preview") {{
         clearProcessResult();
       }}
@@ -1240,7 +1341,9 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
         const payload = await response.json();
 
         if (!response.ok) {{
-          throw new Error(payload.error || "Request failed.");
+          const error = new Error(payload.error || "Request failed.");
+          error.diagnostics = payload.diagnostics || null;
+          throw error;
         }}
 
         if (action === "preview") {{
@@ -1250,6 +1353,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
         }}
       }} catch (error) {{
         showBomError(error.message || "Unexpected request failure.");
+        renderDiagnostics(error.diagnostics || null, error.message || "Unexpected request failure.");
       }} finally {{
         setBusy(false, action);
       }}

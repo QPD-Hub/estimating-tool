@@ -5,7 +5,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from src.contracts.bom_intake import ROOT_TVP_FIELDS, ROW_TVP_FIELDS
-from src.services.bom_intake_service import BomIntakeService
+from src.services.bom_intake_service import BomIntakeRequestError, BomIntakeService
 from src.services.bom_package_locator import BomPackageLocator, BomPackageLocatorError
 from src.services.bom_payload_builder import BomPayloadBuildInput, BomPayloadBuilder
 from src.services.bom_spreadsheet_parser import BomSpreadsheetParser
@@ -56,6 +56,15 @@ class BomUploadPipelineTests(unittest.TestCase):
         self.assertEqual(located.content, xlsx_content)
         self.assertEqual(located.source_type, "archive_upload")
         self.assertIn("docs/customer-bom.xlsx", located.source_file_path)
+        self.assertIsNotNone(located.diagnostics)
+        self.assertEqual(
+            located.diagnostics.selected_archive_member_name,
+            "docs/customer-bom.xlsx",
+        )
+        self.assertEqual(
+            [candidate.member_name for candidate in located.diagnostics.candidate_spreadsheets],
+            ["docs/customer-bom.xlsx", "docs/parts-list.xls"],
+        )
 
     def test_locator_fails_clearly_when_no_spreadsheet_exists(self) -> None:
         locator = BomPackageLocator()
@@ -325,6 +334,84 @@ class BomUploadPipelineTests(unittest.TestCase):
         self.assertEqual(preview_dict["bomRowsTvpRows"][1]["PartNumber"], "COMP-200")
         self.assertEqual(preview_dict["bomRowsTvpRows"][1]["IndentedPartNumber"], "COMP-200")
         self.assertEqual(db_service.calls, [])
+
+    def test_service_preview_zip_diagnostics_show_selected_spreadsheet(self) -> None:
+        db_service = FakeDbService()
+        service = BomIntakeService(db_service=db_service)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bom_workbook = _materialize_fixture_workbook(
+                "partial_standardized_customer_workbook.json",
+                Path(temp_dir),
+            )
+            non_bom_workbook = _materialize_fixture_workbook(
+                "non_bom_workbook.json",
+                Path(temp_dir),
+            )
+            package_path = Path(temp_dir) / "mixed-package.zip"
+            with ZipFile(package_path, "w") as archive:
+                archive.writestr("docs/readme.txt", "ignore")
+                archive.writestr(
+                    "docs/reference.xlsx",
+                    non_bom_workbook.read_bytes(),
+                )
+                archive.writestr(
+                    "docs/customer-bom.xlsx",
+                    bom_workbook.read_bytes(),
+                )
+
+            preview = service.preview_uploaded_bom(
+                header_data={
+                    "customer_name": "ACME",
+                    "uploaded_by": "estimator",
+                    "source_file_name": package_path.name,
+                },
+                upload_data={
+                    "filename": package_path.name,
+                    "content": package_path.read_bytes(),
+                },
+            )
+
+        diagnostics = preview.to_dict()["diagnostics"]
+        self.assertEqual(diagnostics["selectedArchiveMemberName"], "docs/customer-bom.xlsx")
+        self.assertEqual(
+            [candidate["memberName"] for candidate in diagnostics["candidateSpreadsheets"]],
+            ["docs/customer-bom.xlsx", "docs/reference.xlsx"],
+        )
+        self.assertTrue(diagnostics["candidateSpreadsheets"][0]["selected"])
+        self.assertIn("highest-ranked spreadsheet candidate", diagnostics["archiveSelection"]["selectionReason"])
+        self.assertEqual(preview.detected_worksheet, "Customer Export")
+
+    def test_service_preview_failure_returns_header_diagnostics(self) -> None:
+        db_service = FakeDbService()
+        service = BomIntakeService(db_service=db_service)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workbook_path = _materialize_fixture_workbook(
+                "non_bom_workbook.json",
+                Path(temp_dir),
+            )
+            with self.assertRaises(BomIntakeRequestError) as context:
+                service.preview_uploaded_bom(
+                    header_data={
+                        "customer_name": "ACME",
+                        "uploaded_by": "estimator",
+                        "source_file_name": workbook_path.name,
+                    },
+                    upload_data={
+                        "filename": workbook_path.name,
+                        "content": workbook_path.read_bytes(),
+                    },
+                )
+
+        diagnostics = context.exception.diagnostics
+        self.assertEqual(str(context.exception), "No BOM worksheet/header could be detected.")
+        self.assertIsNotNone(diagnostics)
+        self.assertEqual(diagnostics["selectedSourceFileName"], workbook_path.name)
+        self.assertEqual(diagnostics["worksheetNames"], ["Reference"])
+        self.assertEqual(diagnostics["selectedWorksheetName"], "Reference")
+        self.assertGreater(len(diagnostics["firstRowsPreview"]), 0)
+        self.assertEqual(diagnostics["headerRowCandidates"], [])
 
 
 def _materialize_fixture_workbook(fixture_name: str, target_dir: Path) -> Path:
