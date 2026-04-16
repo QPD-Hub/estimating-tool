@@ -540,17 +540,17 @@ def _is_allowed_bom_upload(filename: str) -> bool:
     return Path(filename).suffix.lower() in BOM_UPLOAD_ALLOWED_SUFFIXES
 
 
-def _group_processed_files_by_type(
+def _group_processed_files_by_extension(
     processed_files,
 ) -> list[tuple[str, int]]:
-    counts_by_type: dict[str, int] = {}
+    counts_by_extension: dict[str, int] = {}
 
     for processed_file in processed_files:
         suffix = Path(processed_file.filename).suffix.lower()
-        file_type = suffix if suffix else "No extension"
-        counts_by_type[file_type] = counts_by_type.get(file_type, 0) + 1
+        extension = suffix if suffix else "No extension"
+        counts_by_extension[extension] = counts_by_extension.get(extension, 0) + 1
 
-    return sorted(counts_by_type.items(), key=lambda item: (-item[1], item[0]))
+    return sorted(counts_by_extension.items(), key=lambda item: (-item[1], item[0]))
 
 
 def render_page(config: AppConfig, view_state: ViewState) -> str:
@@ -568,16 +568,19 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
         )
     elif view_state.result:
         result = view_state.result
+        processed_files_by_extension = _group_processed_files_by_extension(
+            result.processed_files
+        )
         created_parts_html = "".join(
             f"<li>{html.escape(destination.sanitized_part_folder_name)}</li>"
             for destination in result.part_destinations
         )
-        processed_files_by_type_html = "".join(
+        processed_files_by_extension_html = "".join(
             "<li>"
-            f"<span>{html.escape(file_type)}</span>"
+            f"<span>{html.escape(extension)}</span>"
             f"<strong>{count}</strong>"
             "</li>"
-            for file_type, count in _group_processed_files_by_type(result.processed_files)
+            for extension, count in processed_files_by_extension
         )
         processed_document_overview_html = (
             '<section class="stack" id="processed-document-overview" aria-live="polite">'
@@ -593,8 +596,12 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             f"<div><dt>Working path</dt><dd>{html.escape(str(result.working_customer_path))}</dd></div>"
             "</dl>"
             "<div class=\"stack\">"
-            "<div><h4>Processed Files By Type</h4><ul class=\"count-list\">"
-            f"{processed_files_by_type_html}</ul></div>"
+            "<div class=\"overview-card\">"
+            "<h4>Doc Package Overview</h4>"
+            "<p class=\"section-note\">Processed file counts grouped by extension.</p>"
+            "<ul class=\"count-list\">"
+            f"{processed_files_by_extension_html}</ul>"
+            "</div>"
             "<div><h4>Part Folders Created</h4><ul>"
             f"{created_parts_html}</ul></div>"
             "</div>"
@@ -854,6 +861,20 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       display: flex;
       justify-content: space-between;
       gap: 1rem;
+    }}
+    .overview-card {{
+      padding: 0.9rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 0.85rem;
+      background: rgba(255, 255, 255, 0.6);
+    }}
+    .overview-card h4 {{
+      margin: 0 0 0.35rem;
+    }}
+    .section-note {{
+      margin: 0 0 0.75rem;
+      color: var(--muted);
+      font-size: 0.95rem;
     }}
     .section-header {{
       display: flex;
