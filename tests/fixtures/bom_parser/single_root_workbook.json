@@ -1,0 +1,15 @@
+{
+  "sheets": [
+    {
+      "name": "BOM",
+      "rows": [
+        ["Customer BOM Export"],
+        [],
+        ["Item Number", "Level", "Part Number", "Description", "Revision", "Quantity", "UOM", "Make/Buy", "MFR", "MFR Number", "Lead Time Days", "Cost"],
+        ["10", 0, "ASM-1000", "Top Assembly", "A", 1, "EA", "MAKE", null, null, null, null],
+        ["20", 1, "COMP-200", "Component 200", "", 2, "EA", "BUY", "ACME", "AC-200", 7, 1.25],
+        ["30", 2, "SCREW-01", "Screw", "", 4, "EA", "BUY", null, null, 14, 0.05]
+      ]
+    }
+  ]
+}

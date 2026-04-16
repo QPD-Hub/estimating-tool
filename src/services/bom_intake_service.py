@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from src.services.bom_payload_builder import (
+    DEFAULT_PARSER_VERSION,
+    BomPayloadBuildInput,
+    BomPayloadBuilder,
+)
+from src.services.bom_package_locator import BomPackageLocator, BomPackageLocatorError
 from src.services.bom_intake_db import BomIntakeDbService
 from src.services.bom_intake_payload import (
     BomIntakeMetadata,
@@ -13,6 +20,11 @@ from src.services.bom_intake_payload import (
     StandardizedBomRow,
     build_bom_intake_payload,
 )
+from src.services.bom_spreadsheet_parser import (
+    BomSpreadsheetParser,
+    BomSpreadsheetParserError,
+)
+from src.services.bom_standardizer import BomStandardizer, BomStandardizerError
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +62,12 @@ STANDARDIZED_ROW_REQUEST_FIELDS = {
     "validation_message",
 }
 
+UPLOAD_REQUEST_FIELDS = {
+    "source_file_path",
+    "filename",
+    "content_base64",
+}
+
 
 class BomIntakeServiceError(ValueError):
     pass
@@ -60,8 +78,20 @@ class BomIntakeRequestError(BomIntakeServiceError):
 
 
 class BomIntakeService:
-    def __init__(self, db_service: BomIntakeDbService) -> None:
+    def __init__(
+        self,
+        db_service: BomIntakeDbService,
+        *,
+        package_locator: BomPackageLocator | None = None,
+        spreadsheet_parser: BomSpreadsheetParser | None = None,
+        standardizer: BomStandardizer | None = None,
+        payload_builder: BomPayloadBuilder | None = None,
+    ) -> None:
         self._db_service = db_service
+        self._package_locator = package_locator or BomPackageLocator()
+        self._spreadsheet_parser = spreadsheet_parser or BomSpreadsheetParser()
+        self._standardizer = standardizer or BomStandardizer()
+        self._payload_builder = payload_builder or BomPayloadBuilder()
 
     def process_standardized_upload(
         self,
@@ -95,6 +125,36 @@ class BomIntakeService:
 
         return self._db_service.create_and_process_intake(payload=payload)
 
+    def process_uploaded_bom(
+        self,
+        *,
+        header_data: Mapping[str, object],
+        upload_data: Mapping[str, object],
+        dry_run: bool = False,
+        preview_path: Path = DEFAULT_PREVIEW_PATH,
+    ) -> dict[str, object]:
+        payload = self.build_uploaded_payload(
+            header_data=header_data,
+            upload_data=upload_data,
+        )
+
+        if dry_run:
+            preview = payload.to_preview_dict()
+            self._write_preview_json(preview_path, preview)
+            return {
+                "DryRun": True,
+                "PreviewPath": str(preview_path),
+                "Payload": preview,
+            }
+
+        logger.info(
+            "Dispatching uploaded BOM for customer '%s' with %s roots and %s rows.",
+            payload.create_input.CustomerName,
+            len(payload.roots),
+            len(payload.rows),
+        )
+        return self._db_service.create_and_process_intake(payload=payload)
+
     def build_standardized_payload(
         self,
         *,
@@ -126,6 +186,56 @@ class BomIntakeService:
         except BomIntakePayloadError as exc:
             raise BomIntakeRequestError(str(exc)) from exc
 
+    def build_uploaded_payload(
+        self,
+        *,
+        header_data: Mapping[str, object],
+        upload_data: Mapping[str, object],
+    ) -> BomIntakePayload:
+        if not isinstance(header_data, Mapping):
+            raise BomIntakeRequestError("Request field 'header' must be an object.")
+        if not isinstance(upload_data, Mapping):
+            raise BomIntakeRequestError("Request field 'upload' must be an object.")
+
+        metadata = self._build_metadata_for_upload(header_data, upload_data)
+        upload_file = self._build_upload_file(upload_data)
+
+        try:
+            located = self._package_locator.locate(
+                filename=upload_file["filename"],
+                content=upload_file["content"],
+                source_file_path=upload_file["source_file_path"],
+            )
+            parsed = self._spreadsheet_parser.parse(
+                filename=located.filename,
+                content=located.content,
+            )
+            standardized = self._standardizer.standardize(parsed)
+            return self._payload_builder.build(
+                metadata=BomPayloadBuildInput(
+                    customer_name=metadata.customer_name,
+                    uploaded_by=metadata.uploaded_by,
+                    quote_number=metadata.quote_number,
+                    source_file_name=metadata.source_file_name
+                    or located.filename,
+                    source_file_path=metadata.source_file_path
+                    or located.source_file_path,
+                    source_sheet_name=metadata.source_sheet_name
+                    or parsed.sheet_name,
+                    source_type=metadata.source_type or located.source_type,
+                    parser_version=metadata.parser_version or DEFAULT_PARSER_VERSION,
+                    intake_notes=metadata.intake_notes,
+                ),
+                standardized_rows=standardized.rows,
+            )
+        except (
+            BomPackageLocatorError,
+            BomSpreadsheetParserError,
+            BomStandardizerError,
+            BomIntakePayloadError,
+        ) as exc:
+            raise BomIntakeRequestError(str(exc)) from exc
+
     def _build_metadata(self, header_data: Mapping[str, object]) -> BomIntakeMetadata:
         _reject_extra_fields(header_data, HEADER_REQUEST_FIELDS, "header")
         try:
@@ -135,6 +245,42 @@ class BomIntakeService:
                 uploaded_by=_required_string(header_data, "uploaded_by"),
                 quote_number=_optional_string(header_data, "quote_number"),
                 source_file_path=_optional_string(header_data, "source_file_path"),
+                source_sheet_name=_optional_string(header_data, "source_sheet_name"),
+                source_type=_optional_string(header_data, "source_type"),
+                parser_version=_optional_string(header_data, "parser_version"),
+                intake_notes=_optional_string(header_data, "intake_notes"),
+            )
+        except (KeyError, TypeError) as exc:
+            raise BomIntakeRequestError(f"Invalid header payload: {exc}") from exc
+
+    def _build_metadata_for_upload(
+        self,
+        header_data: Mapping[str, object],
+        upload_data: Mapping[str, object],
+    ) -> BomIntakeMetadata:
+        _reject_extra_fields(header_data, HEADER_REQUEST_FIELDS, "header")
+        _reject_extra_fields(upload_data, UPLOAD_REQUEST_FIELDS, "upload")
+
+        upload_filename = _optional_string(upload_data, "filename")
+        upload_source_path = _optional_string(upload_data, "source_file_path")
+        inferred_source_filename = upload_filename
+        if inferred_source_filename is None and upload_source_path:
+            inferred_source_filename = Path(upload_source_path).name
+
+        source_file_name = _optional_string(header_data, "source_file_name") or inferred_source_filename
+        if not source_file_name:
+            raise BomIntakeRequestError(
+                "header.source_file_name is required when upload filename cannot be inferred."
+            )
+
+        try:
+            return BomIntakeMetadata(
+                customer_name=_required_string(header_data, "customer_name"),
+                source_file_name=source_file_name,
+                uploaded_by=_required_string(header_data, "uploaded_by"),
+                quote_number=_optional_string(header_data, "quote_number"),
+                source_file_path=_optional_string(header_data, "source_file_path")
+                or upload_source_path,
                 source_sheet_name=_optional_string(header_data, "source_sheet_name"),
                 source_type=_optional_string(header_data, "source_type"),
                 parser_version=_optional_string(header_data, "parser_version"),
@@ -201,6 +347,53 @@ class BomIntakeService:
             json.dumps(payload, indent=2) + "\n",
             encoding="utf-8",
         )
+
+    def _build_upload_file(
+        self,
+        upload_data: Mapping[str, object],
+    ) -> dict[str, object]:
+        source_file_path = _optional_string(upload_data, "source_file_path")
+        filename = _optional_string(upload_data, "filename")
+        content_base64 = _optional_string(upload_data, "content_base64")
+
+        if source_file_path and content_base64:
+            raise BomIntakeRequestError(
+                "upload must provide either source_file_path or content_base64, not both."
+            )
+        if not source_file_path and not content_base64:
+            raise BomIntakeRequestError(
+                "upload must include source_file_path or content_base64."
+            )
+
+        if source_file_path:
+            source_path = Path(source_file_path)
+            if not source_path.is_file():
+                raise BomIntakeRequestError(
+                    f"upload.source_file_path does not exist: {source_file_path}"
+                )
+            return {
+                "filename": filename or source_path.name,
+                "content": source_path.read_bytes(),
+                "source_file_path": str(source_path),
+            }
+
+        if filename is None:
+            raise BomIntakeRequestError(
+                "upload.filename is required when using content_base64."
+            )
+
+        try:
+            content = base64.b64decode(content_base64, validate=True)
+        except ValueError as exc:
+            raise BomIntakeRequestError(
+                "upload.content_base64 must be valid base64."
+            ) from exc
+
+        return {
+            "filename": filename,
+            "content": content,
+            "source_file_path": source_file_path,
+        }
 
 
 def _reject_extra_fields(

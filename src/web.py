@@ -195,13 +195,25 @@ def _handle_bom_intake_api(
         request_body = _parse_json_request(environ)
         header = request_body.get("header")
         standardized_bom_rows = request_body.get("standardizedBomRows")
+        upload = request_body.get("upload")
         dry_run = _resolve_bom_intake_dry_run(environ, request_body)
 
-        result = service.process_standardized_upload(
-            header_data=header,
-            standardized_rows_data=standardized_bom_rows,
-            dry_run=dry_run,
-        )
+        if standardized_bom_rows is not None and upload is not None:
+            raise BomIntakeRequestError(
+                "Provide either standardizedBomRows or upload, not both."
+            )
+        if upload is not None:
+            result = service.process_uploaded_bom(
+                header_data=header,
+                upload_data=upload,
+                dry_run=dry_run,
+            )
+        else:
+            result = service.process_standardized_upload(
+                header_data=header,
+                standardized_rows_data=standardized_bom_rows,
+                dry_run=dry_run,
+            )
         return _respond_json(
             start_response,
             _serialize_bom_intake_result(result),

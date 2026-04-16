@@ -1,4 +1,5 @@
 import io
+import base64
 import json
 import sys
 import tempfile
@@ -47,6 +48,36 @@ class FakeBomIntakeService:
         return {
             "Summary": {
                 "BomIntakeId": 321,
+                "DetectedRootCount": 1,
+                "AcceptedRootCount": 1,
+                "DuplicateRejectedCount": 0,
+                "FinalIntakeStatus": "processed",
+            },
+            "RootResults": [],
+        }
+
+    def process_uploaded_bom(self, *, header_data, upload_data, dry_run=False):
+        self.calls.append(
+            {
+                "header_data": header_data,
+                "upload_data": upload_data,
+                "dry_run": dry_run,
+            }
+        )
+        return {
+            "DryRun": dry_run,
+            "PreviewPath": "/tmp/bom_intake_payload_preview.json" if dry_run else None,
+            "Payload": {
+                "createProc": {
+                    "params": {
+                        "CustomerName": "ACME",
+                        "SourceFileName": "bom.xlsx",
+                    }
+                }
+            },
+        } if dry_run else {
+            "Summary": {
+                "BomIntakeId": 654,
                 "DetectedRootCount": 1,
                 "AcceptedRootCount": 1,
                 "DuplicateRejectedCount": 0,
@@ -181,6 +212,41 @@ class WebBomIntakeApiTests(unittest.TestCase):
         self.assertEqual(status, "400 Bad Request")
         self.assertEqual(fake_db.calls, [])
         self.assertIn("header", json.loads(body)["error"])
+
+    def test_api_routes_upload_payload_to_uploaded_bom_flow(self) -> None:
+        fake_service = FakeBomIntakeService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                bom_intake_service_override=fake_service,
+            )
+
+            status, _headers, body = _invoke_json(
+                app,
+                "/api/dev/bom-intake",
+                {
+                    "header": {
+                        "customer_name": "ACME",
+                        "uploaded_by": "estimator",
+                        "source_file_name": "bom.xlsx",
+                    },
+                    "upload": {
+                        "filename": "bom.xlsx",
+                        "content_base64": base64.b64encode(b"fake").decode("ascii"),
+                    },
+                    "dryRun": True,
+                },
+            )
+
+        self.assertEqual(status, "200 OK")
+        payload = json.loads(body)
+        self.assertTrue(payload["dryRun"])
+        self.assertIn("upload_data", fake_service.calls[0])
 
 
 def _invoke_json(app, path: str, payload: dict[str, object]):
