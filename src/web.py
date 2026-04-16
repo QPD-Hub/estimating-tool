@@ -555,24 +555,15 @@ def _group_processed_files_by_type(
 
 def render_page(config: AppConfig, view_state: ViewState) -> str:
     app_env = html.escape(config.app_env)
-    customer_value = html.escape(view_state.customer)
-    part_values = view_state.top_level_parts or [""]
 
-    legacy_part_inputs = "".join(
-        (
-            '<input name="top_level_parts" type="text" '
-            f'value="{html.escape(part_value)}" '
-            'placeholder="Enter a top-level part" required>'
-        )
-        for part_value in part_values
-    )
-
-    legacy_result_html = ""
+    processed_document_overview_html = ""
     if view_state.error:
-        legacy_result_html = (
-            '<section class="callout error" aria-live="polite">'
-            "<h3>Legacy document handoff failed</h3>"
+        processed_document_overview_html = (
+            '<section class="stack" id="processed-document-overview" aria-live="polite">'
+            '<div class="callout error">'
+            "<h3>Processed Document Overview</h3>"
             f"<p>{html.escape(view_state.error)}</p>"
+            "</div>"
             "</section>"
         )
     elif view_state.result:
@@ -588,9 +579,10 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             "</li>"
             for file_type, count in _group_processed_files_by_type(result.processed_files)
         )
-        legacy_result_html = (
-            '<section class="callout success" aria-live="polite">'
-            "<h3>Legacy document handoff complete</h3>"
+        processed_document_overview_html = (
+            '<section class="stack" id="processed-document-overview" aria-live="polite">'
+            '<div class="callout success">'
+            "<h3>Processed Document Overview</h3>"
             f"<p>{html.escape(view_state.message)}</p>"
             "<dl class=\"summary-grid\">"
             f"<div><dt>Customer</dt><dd>{html.escape(result.customer_name)}</dd></div>"
@@ -605,6 +597,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             f"{processed_files_by_type_html}</ul></div>"
             "<div><h4>Part Folders Created</h4><ul>"
             f"{created_parts_html}</ul></div>"
+            "</div>"
             "</div>"
             "</section>"
         )
@@ -862,13 +855,6 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       justify-content: space-between;
       gap: 1rem;
     }}
-    .legacy-panel {{
-      background: linear-gradient(180deg, #fffdf9 0%, #fcf8f1 100%);
-    }}
-    .part-inputs {{
-      display: grid;
-      gap: 0.65rem;
-    }}
     .section-header {{
       display: flex;
       justify-content: space-between;
@@ -1059,39 +1045,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
           </table>
         </div>
       </section>
-    </section>
-
-    <section class="panel legacy-panel">
-      <div class="section-header">
-        <div class="stack">
-          <h2>Legacy Document Handoff</h2>
-          <p class="subtle">The original multi-file handoff flow remains available below for non-BOM intake work.</p>
-        </div>
-      </div>
-      <form method="post" enctype="multipart/form-data" id="handoff-form" novalidate>
-        <label for="customer">
-          Customer
-          <input id="customer" name="customer" type="text" value="{customer_value}" required>
-        </label>
-        <div class="stack">
-          <div class="section-header">
-            <h3>Top Level Parts</h3>
-            <button type="button" class="ghost" id="add-part-button">Add Part</button>
-          </div>
-          <div class="part-inputs" id="part-inputs">
-            {legacy_part_inputs}
-          </div>
-        </div>
-        <label for="documents">
-          Documents
-          <input id="documents" name="documents" type="file" multiple required>
-        </label>
-        <p class="status-line" id="client-message" aria-live="polite"></p>
-        <div class="actions">
-          <button type="submit" id="submit-button">Process Documents</button>
-        </div>
-      </form>
-      {legacy_result_html}
+      {processed_document_overview_html}
     </section>
   </main>
   <script>
@@ -1365,63 +1319,6 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
 
     processButton.addEventListener("click", () => {{
       runBomAction("process");
-    }});
-
-    const handoffForm = document.getElementById("handoff-form");
-    const submitButton = document.getElementById("submit-button");
-    const customerInput = document.getElementById("customer");
-    const documentsInput = document.getElementById("documents");
-    const partInputs = document.getElementById("part-inputs");
-    const addPartButton = document.getElementById("add-part-button");
-    const clientMessage = document.getElementById("client-message");
-
-    function createPartInput() {{
-      const input = document.createElement("input");
-      input.name = "top_level_parts";
-      input.type = "text";
-      input.placeholder = "Enter a top-level part";
-      input.required = true;
-      return input;
-    }}
-
-    addPartButton.addEventListener("click", () => {{
-      partInputs.appendChild(createPartInput());
-    }});
-
-    handoffForm.addEventListener("submit", (event) => {{
-      const customer = customerInput.value.trim();
-      const fileCount = documentsInput.files.length;
-      const partValues = Array.from(
-        partInputs.querySelectorAll('input[name="top_level_parts"]')
-      ).map((input) => input.value.trim());
-
-      if (!customer) {{
-        event.preventDefault();
-        clientMessage.textContent = "Customer is required.";
-        customerInput.focus();
-        return;
-      }}
-
-      if (!partValues.some((value) => value)) {{
-        event.preventDefault();
-        clientMessage.textContent = "Enter at least one Top Level Part.";
-        const firstPartInput = partInputs.querySelector('input[name="top_level_parts"]');
-        if (firstPartInput) {{
-          firstPartInput.focus();
-        }}
-        return;
-      }}
-
-      if (fileCount === 0) {{
-        event.preventDefault();
-        clientMessage.textContent = "Select at least one file.";
-        documentsInput.focus();
-        return;
-      }}
-
-      submitButton.disabled = true;
-      submitButton.textContent = "Processing...";
-      clientMessage.textContent = "Uploading and processing files...";
     }});
   </script>
 </body>
