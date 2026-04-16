@@ -1,0 +1,14 @@
+{
+  "sheets": [
+    {
+      "name": "Customer Export",
+      "rows": [
+        ["Partial Standardized Export"],
+        ["ORIGINAL", "Parent Part", "Part Number", "Indented Part Number", "Revision", "Description", "Quantity", "UOM", "Level", "Find No", "Release Status", "Critical Part", "Procurement Type", "Bulk Material"],
+        ["ASM-1000", null, "ASM-1000", "ASM-1000", "A", "Top Assembly", 1, "EA", 0, "10", "Released", "N", "MAKE", "N"],
+        ["COMP-200", null, null, "COMP-200", "", "Component 200", 2, "EA", 1, "20", "Released", "Y", "BUY", "N"],
+        ["SCREW-01", null, null, "SCREW-01", "", "Screw", 4, "EA", 2, "30", "Released", "N", "BUY", "Y"]
+      ]
+    }
+  ]
+}

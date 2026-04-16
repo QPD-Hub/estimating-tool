@@ -176,6 +176,64 @@ class BomUploadPipelineTests(unittest.TestCase):
             ROW_TVP_FIELDS,
         )
 
+    def test_partial_standardized_customer_headers_preview_and_payload_build(self) -> None:
+        parser_service = BomSpreadsheetParser()
+        standardizer = BomStandardizer()
+        payload_builder = BomPayloadBuilder()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workbook_path = _materialize_fixture_workbook(
+                "partial_standardized_customer_workbook.json",
+                Path(temp_dir),
+            )
+            parsed = parser_service.parse(
+                filename=workbook_path.name,
+                content=workbook_path.read_bytes(),
+            )
+            standardized = standardizer.standardize(parsed)
+            payload = payload_builder.build(
+                metadata=BomPayloadBuildInput(
+                    customer_name="ACME",
+                    uploaded_by="estimator",
+                    source_file_name=workbook_path.name,
+                    source_file_path=str(workbook_path),
+                    source_sheet_name=parsed.sheet_name,
+                    source_type="spreadsheet_upload",
+                    parser_version="bom-parser-v1",
+                ),
+                standardized_rows=standardized.rows,
+            )
+
+        preview = payload.to_preview_dict()
+
+        self.assertEqual(parsed.sheet_name, "Customer Export")
+        self.assertEqual(parsed.header_row_number, 2)
+        self.assertEqual(
+            [column.header_name for column in parsed.columns],
+            [
+                "ORIGINAL",
+                "Parent Part",
+                "Part Number",
+                "Indented Part Number",
+                "Revision",
+                "Description",
+                "Quantity",
+                "UOM",
+                "Level",
+                "Find No",
+                "Procurement Type",
+            ],
+        )
+        self.assertEqual(len(standardized.rows), 3)
+        self.assertEqual(standardized.rows[0].source_row_number, 3)
+        self.assertEqual(standardized.rows[1].part_number, "COMP-200")
+        self.assertEqual(standardized.rows[1].indented_part_number, "COMP-200")
+        self.assertEqual(standardized.rows[1].parent_part, "ASM-1000")
+        self.assertEqual(standardized.rows[1].make_buy, "BUY")
+        self.assertEqual(preview["processStandardizedProc"]["rows"][1]["PartNumber"], "COMP-200")
+        self.assertEqual(preview["processStandardizedProc"]["rows"][1]["ParentPart"], "ASM-1000")
+        self.assertEqual(preview["processStandardizedProc"]["rows"][1]["MakeBuy"], "BUY")
+
     def test_service_dry_run_builds_payload_from_upload_path(self) -> None:
         db_service = FakeDbService()
         service = BomIntakeService(db_service=db_service)
@@ -234,6 +292,38 @@ class BomUploadPipelineTests(unittest.TestCase):
         self.assertEqual(preview.detected_source_type, "spreadsheet_upload")
         self.assertEqual(preview.root_count, 1)
         self.assertEqual(preview.row_count, 3)
+        self.assertEqual(db_service.calls, [])
+
+    def test_service_preview_accepts_partial_standardized_customer_headers(self) -> None:
+        db_service = FakeDbService()
+        service = BomIntakeService(db_service=db_service)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workbook_path = _materialize_fixture_workbook(
+                "partial_standardized_customer_workbook.json",
+                Path(temp_dir),
+            )
+            preview = service.preview_uploaded_bom(
+                header_data={
+                    "customer_name": "ACME",
+                    "uploaded_by": "estimator",
+                    "source_file_name": workbook_path.name,
+                },
+                upload_data={
+                    "filename": workbook_path.name,
+                    "content": workbook_path.read_bytes(),
+                },
+            )
+
+        preview_dict = preview.to_dict()
+
+        self.assertEqual(preview.detected_worksheet, "Customer Export")
+        self.assertEqual(preview.root_count, 1)
+        self.assertEqual(preview.row_count, 3)
+        self.assertEqual(preview.standardized_rows[1].source_row_number, 4)
+        self.assertEqual(preview.standardized_rows[1].part_number, "COMP-200")
+        self.assertEqual(preview_dict["bomRowsTvpRows"][1]["PartNumber"], "COMP-200")
+        self.assertEqual(preview_dict["bomRowsTvpRows"][1]["IndentedPartNumber"], "COMP-200")
         self.assertEqual(db_service.calls, [])
 
 

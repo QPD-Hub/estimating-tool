@@ -197,9 +197,11 @@ def _detect_header_row(
                     score += 2 if canonical_field in {"part_number", "bom_level", "description"} else 1
                     break
 
-        if "part_number" not in header_map and "indented_part_number" not in header_map:
-            continue
         if "bom_level" not in header_map:
+            continue
+        if "description" not in header_map:
+            continue
+        if "part_number" not in header_map and "indented_part_number" not in header_map:
             continue
 
         if best is None or score > best[2]:
