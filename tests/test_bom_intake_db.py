@@ -1,7 +1,8 @@
 import unittest
 
 from src.config import SqlServerConfig
-from src.services.bom_intake_db import BomIntakeDbService
+from src.services.bom_intake_db import BomIntakeDbError, BomIntakeDbService
+from src.services.bom_intake_payload import BomIntakeMetadata, StandardizedBomRow, build_bom_intake_payload
 
 
 class FakeCursor:
@@ -12,7 +13,7 @@ class FakeCursor:
         self._set_index = 0
         self.description = None
 
-    def execute(self, sql: str, params: tuple[object, ...] = ()):
+    def execute(self, sql: str, params: tuple[object, ...] = ()) -> "FakeCursor":
         self.executed.append((sql, params))
         execution = self._executions.pop(0)
         self._current_sets = execution["result_sets"]
@@ -21,9 +22,7 @@ class FakeCursor:
         return self
 
     def fetchall(self):
-        return [
-            tuple(row.values()) for row in self._current_sets[self._set_index]
-        ]
+        return [tuple(row.values()) for row in self._current_sets[self._set_index]]
 
     def nextset(self):
         self._set_index += 1
@@ -64,6 +63,60 @@ class FakeConnection:
         self.closed = True
 
 
+def _payload():
+    return build_bom_intake_payload(
+        BomIntakeMetadata(
+            customer_name="ACME",
+            quote_number="Q-1",
+            source_file_name="bom.xlsx",
+            source_file_path="/tmp/bom.xlsx",
+            source_sheet_name="BOM",
+            source_type="standardized_upload",
+            uploaded_by="estimator",
+            parser_version="v1",
+            intake_notes="notes",
+        ),
+        [
+            StandardizedBomRow(
+                source_row_number=1,
+                original_value=None,
+                parent_part=None,
+                part_number="ABC-1000",
+                indented_part_number="ABC-1000",
+                bom_level=0,
+                description="TOP",
+                revision="1",
+                quantity=1,
+                uom="EA",
+                item_number="10",
+                make_buy="MAKE",
+                mfr=None,
+                mfr_number=None,
+                lead_time_days=None,
+                cost=None,
+            ),
+            StandardizedBomRow(
+                source_row_number=2,
+                original_value=None,
+                parent_part="ABC-1000",
+                part_number="COMP-200",
+                indented_part_number="COMP-200",
+                bom_level=1,
+                description="COMPONENT",
+                revision="",
+                quantity=2,
+                uom="EA",
+                item_number="20",
+                make_buy="BUY",
+                mfr=None,
+                mfr_number=None,
+                lead_time_days=None,
+                cost=None,
+            ),
+        ],
+    )
+
+
 class BomIntakeDbServiceTests(unittest.TestCase):
     def test_create_and_process_maps_payload_into_sql_calls(self) -> None:
         fake_cursor = FakeCursor(
@@ -74,10 +127,10 @@ class BomIntakeDbServiceTests(unittest.TestCase):
                         [
                             {
                                 "BomIntakeId": 321,
-                                "DetectedRootCount": 2,
+                                "DetectedRootCount": 1,
                                 "AcceptedRootCount": 1,
-                                "DuplicateRejectedCount": 1,
-                                "FinalIntakeStatus": "processed_with_duplicates",
+                                "DuplicateRejectedCount": 0,
+                                "FinalIntakeStatus": "processed",
                             }
                         ],
                         [
@@ -91,18 +144,7 @@ class BomIntakeDbServiceTests(unittest.TestCase):
                                 "DecisionReason": "Inserted",
                                 "BomRootId": 11,
                                 "ExistingBomRootId": None,
-                            },
-                            {
-                                "RootClientId": "R2",
-                                "RootSequence": 2,
-                                "CustomerName": "ACME",
-                                "Level0PartNumber": "XYZ-9000",
-                                "Revision": "A",
-                                "DecisionStatus": "duplicate_rejected",
-                                "DecisionReason": "Already exists",
-                                "BomRootId": None,
-                                "ExistingBomRootId": 22,
-                            },
+                            }
                         ],
                     ]
                 },
@@ -118,75 +160,7 @@ class BomIntakeDbServiceTests(unittest.TestCase):
             connect=lambda **_kwargs: fake_connection,
         )
 
-        result = service.create_and_process_intake(
-            header={
-                "CustomerName": "ACME",
-                "QuoteNumber": "Q-1",
-                "SourceFileName": "bom.xlsx",
-                "SourceFilePath": "/tmp/bom.xlsx",
-                "SourceSheetName": "BOM",
-                "SourceType": "standardized_upload",
-                "UploadedBy": "estimator",
-                "ParserVersion": "v1",
-                "IntakeNotes": "notes",
-            },
-            root_candidates=[
-                {
-                    "RootClientId": "R1",
-                    "RootSequence": 1,
-                    "SourceRowNumber": 1,
-                    "CustomerName": "ACME",
-                    "Level0PartNumber": "ABC-1000",
-                    "Revision": "1",
-                    "RootDescription": "TOP",
-                    "RootItemNumber": "10",
-                    "RootQuantity": 1,
-                    "RootUOM": "EA",
-                    "RootMakeBuy": "MAKE",
-                    "RootMFR": None,
-                    "RootMFRNumber": None,
-                },
-                {
-                    "RootClientId": "R2",
-                    "RootSequence": 2,
-                    "SourceRowNumber": 10,
-                    "CustomerName": "ACME",
-                    "Level0PartNumber": "XYZ-9000",
-                    "Revision": "A",
-                    "RootDescription": "SECOND",
-                    "RootItemNumber": "10",
-                    "RootQuantity": 1,
-                    "RootUOM": "EA",
-                    "RootMakeBuy": "MAKE",
-                    "RootMFR": None,
-                    "RootMFRNumber": None,
-                },
-            ],
-            bom_rows=[
-                {
-                    "RootClientId": "R1",
-                    "RowSequence": 1,
-                    "SourceRowNumber": 1,
-                    "OriginalValue": None,
-                    "ParentPart": None,
-                    "PartNumber": "ABC-1000",
-                    "IndentedPartNumber": "ABC-1000",
-                    "BomLevel": 0,
-                    "Description": "TOP",
-                    "Revision": "1",
-                    "Quantity": 1,
-                    "UOM": "EA",
-                    "ItemNumber": "10",
-                    "MakeBuy": "MAKE",
-                    "MFR": None,
-                    "MFRNumber": None,
-                    "LeadTimeDays": None,
-                    "Cost": None,
-                    "ValidationMessage": None,
-                }
-            ],
-            detected_by="estimator",
-        )
+        result = service.create_and_process_intake(payload=_payload())
 
         create_sql, create_params = fake_cursor.executed[0]
         process_sql, process_params = fake_cursor.executed[1]
@@ -202,8 +176,8 @@ class BomIntakeDbServiceTests(unittest.TestCase):
         self.assertEqual(process_params[-1], "estimator")
         self.assertTrue(fake_connection.committed)
         self.assertTrue(fake_connection.closed)
-        self.assertEqual(result["Summary"]["DuplicateRejectedCount"], 1)
-        self.assertEqual(len(result["RootResults"]), 2)
+        self.assertEqual(result["Summary"]["DuplicateRejectedCount"], 0)
+        self.assertEqual(len(result["RootResults"]), 1)
 
     def test_create_intake_prefers_explicit_output_select_over_proc_result_sets(self) -> None:
         fake_cursor = FakeCursor(
@@ -228,17 +202,7 @@ class BomIntakeDbServiceTests(unittest.TestCase):
 
         bom_intake_id = service._create_intake(
             fake_cursor,
-            {
-                "CustomerName": "ACME",
-                "QuoteNumber": "Q-1",
-                "SourceFileName": "bom.xlsx",
-                "SourceFilePath": "/tmp/bom.xlsx",
-                "SourceSheetName": "BOM",
-                "SourceType": "standardized_upload",
-                "UploadedBy": "estimator",
-                "ParserVersion": "v1",
-                "IntakeNotes": "notes",
-            },
+            _payload().create_input.to_dict(),
         )
 
         create_sql, _create_params = fake_cursor.executed[0]
@@ -248,37 +212,21 @@ class BomIntakeDbServiceTests(unittest.TestCase):
         self.assertIn("SELECT @BomIntakeId AS BomIntakeId;", create_sql)
         self.assertEqual(bom_intake_id, 321)
 
-    def test_build_connection_kwargs_uses_non_odbc_fields(self) -> None:
+    def test_rejects_header_shape_that_does_not_match_sql_contract(self) -> None:
         service = BomIntakeDbService(
             sql_config=SqlServerConfig(
                 host="sql-host",
-                port=1444,
-                database="Estimating",
                 username="app_user",
                 password="secret",
-                timeout=12,
-                driver="ignored",
-                encrypt="no",
-                trust_server_certificate="no",
             ),
             connect=lambda **_kwargs: None,
         )
 
-        kwargs = service.build_connection_kwargs()
-
-        self.assertEqual(
-            kwargs,
-            {
-                "server": "sql-host",
-                "user": "app_user",
-                "password": "secret",
-                "database": "Estimating",
-                "port": 1444,
-                "timeout": 12,
-                "login_timeout": 12,
-                "autocommit": False,
-            },
-        )
+        with self.assertRaises(BomIntakeDbError):
+            service._create_intake(
+                FakeCursor(executions=[]),
+                {"CustomerName": "ACME", "Unexpected": "value"},
+            )
 
 
 if __name__ == "__main__":

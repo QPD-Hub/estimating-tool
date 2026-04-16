@@ -1,0 +1,84 @@
+{
+  "createProc": {
+    "procedure": "dbo.usp_BOM_Intake_Create",
+    "params": {
+      "CustomerName": "ACME",
+      "QuoteNumber": "Q-100",
+      "SourceFileName": "customer-bom.xlsx",
+      "SourceFilePath": "/tmp/customer-bom.xlsx",
+      "SourceSheetName": "BOM",
+      "SourceType": "standardized_upload",
+      "UploadedBy": "estimator",
+      "ParserVersion": "v1",
+      "IntakeNotes": "fixture preview"
+    }
+  },
+  "processStandardizedProc": {
+    "procedure": "dbo.usp_BOM_Intake_ProcessStandardized",
+    "params": {
+      "BomIntakeId": null,
+      "DetectedBy": "estimator"
+    },
+    "roots": [
+      {
+        "RootClientId": "R1",
+        "RootSequence": 1,
+        "SourceRowNumber": 1,
+        "CustomerName": "ACME",
+        "Level0PartNumber": "ABC-1000",
+        "Revision": "1",
+        "RootDescription": "TOP",
+        "RootItemNumber": "10",
+        "RootQuantity": 1,
+        "RootUOM": "EA",
+        "RootMakeBuy": "MAKE",
+        "RootMFR": null,
+        "RootMFRNumber": null
+      }
+    ],
+    "rows": [
+      {
+        "RootClientId": "R1",
+        "RowSequence": 1,
+        "SourceRowNumber": 1,
+        "OriginalValue": null,
+        "ParentPart": null,
+        "PartNumber": "ABC-1000",
+        "IndentedPartNumber": "ABC-1000",
+        "BomLevel": 0,
+        "Description": "TOP",
+        "Revision": "1",
+        "Quantity": 1,
+        "UOM": "EA",
+        "ItemNumber": "10",
+        "MakeBuy": "MAKE",
+        "MFR": null,
+        "MFRNumber": null,
+        "LeadTimeDays": null,
+        "Cost": null,
+        "ValidationMessage": null
+      },
+      {
+        "RootClientId": "R1",
+        "RowSequence": 2,
+        "SourceRowNumber": 2,
+        "OriginalValue": null,
+        "ParentPart": "ABC-1000",
+        "PartNumber": "COMP-200",
+        "IndentedPartNumber": "COMP-200",
+        "BomLevel": 1,
+        "Description": "COMPONENT",
+        "Revision": "",
+        "Quantity": 2,
+        "UOM": "EA",
+        "ItemNumber": "20",
+        "MakeBuy": "BUY",
+        "MFR": "MCMASTER",
+        "MFRNumber": "91234A123",
+        "LeadTimeDays": 7,
+        "Cost": 1.25,
+        "ValidationMessage": null
+      }
+    ]
+  }
+}

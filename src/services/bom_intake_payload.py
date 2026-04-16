@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.contracts.bom_intake import (
+    BomIntakeRootRow,
+    BomIntakeRow,
+    CreateBomIntakeInput,
+    ProcessStandardizedBomIntakeInput,
+)
+
 
 class BomIntakePayloadError(ValueError):
     pass
@@ -23,23 +30,19 @@ class BomIntakeMetadata:
         object.__setattr__(
             self,
             "customer_name",
-            _normalize_required_text(self.customer_name, "CustomerName"),
+            _normalize_required_text(self.customer_name, "customer_name"),
         )
         object.__setattr__(
             self,
             "source_file_name",
-            _normalize_required_text(self.source_file_name, "SourceFileName"),
+            _normalize_required_text(self.source_file_name, "source_file_name"),
         )
         object.__setattr__(
             self,
             "uploaded_by",
-            _normalize_required_text(self.uploaded_by, "UploadedBy"),
+            _normalize_required_text(self.uploaded_by, "uploaded_by"),
         )
-        object.__setattr__(
-            self,
-            "quote_number",
-            _normalize_optional_text(self.quote_number),
-        )
+        object.__setattr__(self, "quote_number", _normalize_optional_text(self.quote_number))
         object.__setattr__(
             self,
             "source_file_path",
@@ -56,24 +59,20 @@ class BomIntakeMetadata:
             "parser_version",
             _normalize_optional_text(self.parser_version),
         )
-        object.__setattr__(
-            self,
-            "intake_notes",
-            _normalize_optional_text(self.intake_notes),
-        )
+        object.__setattr__(self, "intake_notes", _normalize_optional_text(self.intake_notes))
 
-    def to_sql_params(self) -> dict[str, object]:
-        return {
-            "CustomerName": self.customer_name,
-            "QuoteNumber": self.quote_number,
-            "SourceFileName": self.source_file_name,
-            "SourceFilePath": self.source_file_path,
-            "SourceSheetName": self.source_sheet_name,
-            "SourceType": self.source_type,
-            "UploadedBy": self.uploaded_by,
-            "ParserVersion": self.parser_version,
-            "IntakeNotes": self.intake_notes,
-        }
+    def to_create_input(self) -> CreateBomIntakeInput:
+        return CreateBomIntakeInput(
+            CustomerName=self.customer_name,
+            QuoteNumber=self.quote_number,
+            SourceFileName=self.source_file_name,
+            SourceFilePath=self.source_file_path,
+            SourceSheetName=self.source_sheet_name,
+            SourceType=self.source_type,
+            UploadedBy=self.uploaded_by,
+            ParserVersion=self.parser_version,
+            IntakeNotes=self.intake_notes,
+        )
 
 
 @dataclass(frozen=True)
@@ -92,34 +91,33 @@ class StandardizedBomRow:
     make_buy: str | None
     mfr: str | None
     mfr_number: str | None
-    lead_time_days: int | None
+    lead_time_days: int | float | None
     cost: int | float | None
     validation_message: str | None = None
-    is_level_0: bool | None = None
 
     def __post_init__(self) -> None:
         if self.source_row_number < 1:
-            raise BomIntakePayloadError("SourceRowNumber must be 1 or greater.")
+            raise BomIntakePayloadError("source_row_number must be 1 or greater.")
         if self.bom_level < 0:
-            raise BomIntakePayloadError("BomLevel must be 0 or greater.")
+            raise BomIntakePayloadError("bom_level must be 0 or greater.")
 
         object.__setattr__(
             self,
             "part_number",
-            _normalize_required_text(self.part_number, "PartNumber"),
+            _normalize_required_text(self.part_number, "part_number"),
         )
         object.__setattr__(
             self,
             "indented_part_number",
             _normalize_required_text(
                 self.indented_part_number,
-                "IndentedPartNumber",
+                "indented_part_number",
             ),
         )
         object.__setattr__(
             self,
             "description",
-            _normalize_required_text(self.description, "Description"),
+            _normalize_required_text(self.description, "description"),
         )
         object.__setattr__(self, "original_value", _normalize_optional_text(self.original_value))
         object.__setattr__(self, "parent_part", _normalize_optional_text(self.parent_part))
@@ -135,301 +133,77 @@ class StandardizedBomRow:
             _normalize_optional_text(self.validation_message),
         )
 
-        inferred_level_0 = self.bom_level == 0
-        if self.is_level_0 is None:
-            object.__setattr__(self, "is_level_0", inferred_level_0)
-        elif self.is_level_0 != inferred_level_0:
-            raise BomIntakePayloadError(
-                "IsLevel0 does not match BomLevel for SourceRowNumber "
-                f"{self.source_row_number}."
-            )
-
-
-@dataclass(frozen=True)
-class BomRootCandidate:
-    root_client_id: str
-    root_sequence: int
-    source_row_number: int
-    customer_name: str
-    level_0_part_number: str
-    revision: str
-    root_description: str | None = None
-    root_item_number: str | None = None
-    root_quantity: int | float | None = None
-    root_uom: str | None = None
-    root_make_buy: str | None = None
-    root_mfr: str | None = None
-    root_mfr_number: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.root_sequence < 1:
-            raise BomIntakePayloadError("RootSequence must be 1 or greater.")
-        if self.source_row_number < 1:
-            raise BomIntakePayloadError("SourceRowNumber must be 1 or greater.")
-
-        object.__setattr__(
-            self,
-            "root_client_id",
-            _normalize_required_text(self.root_client_id, "RootClientId"),
-        )
-        object.__setattr__(
-            self,
-            "customer_name",
-            _normalize_required_text(self.customer_name, "CustomerName"),
-        )
-        object.__setattr__(
-            self,
-            "level_0_part_number",
-            _normalize_required_text(self.level_0_part_number, "Level0PartNumber"),
-        )
-        object.__setattr__(self, "revision", _normalize_required_text(self.revision, "Revision"))
-        object.__setattr__(
-            self,
-            "root_description",
-            _normalize_optional_text(self.root_description),
-        )
-        object.__setattr__(
-            self,
-            "root_item_number",
-            _normalize_optional_text(self.root_item_number),
-        )
-        object.__setattr__(self, "root_uom", _normalize_optional_text(self.root_uom))
-        object.__setattr__(
-            self,
-            "root_make_buy",
-            _normalize_optional_text(self.root_make_buy),
-        )
-        object.__setattr__(self, "root_mfr", _normalize_optional_text(self.root_mfr))
-        object.__setattr__(
-            self,
-            "root_mfr_number",
-            _normalize_optional_text(self.root_mfr_number),
-        )
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "RootClientId": self.root_client_id,
-            "RootSequence": self.root_sequence,
-            "SourceRowNumber": self.source_row_number,
-            "CustomerName": self.customer_name,
-            "Level0PartNumber": self.level_0_part_number,
-            "Revision": self.revision,
-            "RootDescription": self.root_description,
-            "RootItemNumber": self.root_item_number,
-            "RootQuantity": self.root_quantity,
-            "RootUOM": self.root_uom,
-            "RootMakeBuy": self.root_make_buy,
-            "RootMFR": self.root_mfr,
-            "RootMFRNumber": self.root_mfr_number,
-        }
-
-
-@dataclass(frozen=True)
-class BomUploadRow:
-    root_client_id: str
-    row_sequence: int
-    source_row_number: int
-    original_value: str | None
-    parent_part: str | None
-    part_number: str
-    indented_part_number: str
-    bom_level: int
-    description: str
-    revision: str | None
-    quantity: int | float | None
-    uom: str | None
-    item_number: str | None
-    make_buy: str | None
-    mfr: str | None
-    mfr_number: str | None
-    lead_time_days: int | None
-    cost: int | float | None
-    is_level_0: bool | None = None
-    validation_message: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.row_sequence < 1:
-            raise BomIntakePayloadError("RowSequence must be 1 or greater.")
-        if self.source_row_number < 1:
-            raise BomIntakePayloadError("SourceRowNumber must be 1 or greater.")
-        if self.bom_level < 0:
-            raise BomIntakePayloadError("BomLevel must be 0 or greater.")
-
-        object.__setattr__(
-            self,
-            "root_client_id",
-            _normalize_required_text(self.root_client_id, "RootClientId"),
-        )
-        object.__setattr__(
-            self,
-            "part_number",
-            _normalize_required_text(self.part_number, "PartNumber"),
-        )
-        object.__setattr__(
-            self,
-            "indented_part_number",
-            _normalize_required_text(
-                self.indented_part_number,
-                "IndentedPartNumber",
-            ),
-        )
-        object.__setattr__(
-            self,
-            "description",
-            _normalize_required_text(self.description, "Description"),
-        )
-        object.__setattr__(self, "original_value", _normalize_optional_text(self.original_value))
-        object.__setattr__(self, "parent_part", _normalize_optional_text(self.parent_part))
-        object.__setattr__(self, "revision", _normalize_revision(self.revision))
-        object.__setattr__(self, "uom", _normalize_optional_text(self.uom))
-        object.__setattr__(self, "item_number", _normalize_optional_text(self.item_number))
-        object.__setattr__(self, "make_buy", _normalize_optional_text(self.make_buy))
-        object.__setattr__(self, "mfr", _normalize_optional_text(self.mfr))
-        object.__setattr__(self, "mfr_number", _normalize_optional_text(self.mfr_number))
-        object.__setattr__(
-            self,
-            "validation_message",
-            _normalize_optional_text(self.validation_message),
-        )
-
-        inferred_level_0 = self.bom_level == 0
-        if self.is_level_0 is None:
-            object.__setattr__(self, "is_level_0", inferred_level_0)
-        elif self.is_level_0 != inferred_level_0:
-            raise BomIntakePayloadError(
-                "IsLevel0 does not match BomLevel for RowSequence "
-                f"{self.row_sequence}."
-            )
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "RootClientId": self.root_client_id,
-            "RowSequence": self.row_sequence,
-            "SourceRowNumber": self.source_row_number,
-            "OriginalValue": self.original_value,
-            "ParentPart": self.parent_part,
-            "PartNumber": self.part_number,
-            "IndentedPartNumber": self.indented_part_number,
-            "BomLevel": self.bom_level,
-            "Description": self.description,
-            "Revision": self.revision,
-            "Quantity": self.quantity,
-            "UOM": self.uom,
-            "ItemNumber": self.item_number,
-            "MakeBuy": self.make_buy,
-            "MFR": self.mfr,
-            "MFRNumber": self.mfr_number,
-            "LeadTimeDays": self.lead_time_days,
-            "Cost": self.cost,
-            "IsLevel0": self.is_level_0,
-            "ValidationMessage": self.validation_message,
-        }
+    @property
+    def is_root_row(self) -> bool:
+        return self.bom_level == 0
 
 
 @dataclass(frozen=True)
 class BomIntakePayload:
-    metadata: BomIntakeMetadata
-    root_candidates: list[BomRootCandidate]
-    bom_rows: list[BomUploadRow]
+    create_input: CreateBomIntakeInput
+    detected_by: str
+    roots: list[BomIntakeRootRow]
+    rows: list[BomIntakeRow]
 
     def __post_init__(self) -> None:
         self.validate()
 
     def validate(self) -> None:
-        if not self.root_candidates:
+        if not self.roots:
             raise BomIntakePayloadError("At least one root candidate is required.")
-        if not self.bom_rows:
+        if not self.rows:
             raise BomIntakePayloadError("At least one BOM row is required.")
 
-        roots_by_id: dict[str, BomRootCandidate] = {}
-        roots_by_identity: set[tuple[str, str, str]] = set()
-        root_sequences: set[int] = set()
+        roots_by_id: dict[str, BomIntakeRootRow] = {}
+        row_sequences_by_root: dict[str, set[int]] = {}
 
-        for root in self.root_candidates:
-            if root.root_client_id in roots_by_id:
+        for root in self.roots:
+            if root.RootClientId in roots_by_id:
                 raise BomIntakePayloadError(
-                    f"Duplicate RootClientId detected: {root.root_client_id}"
+                    f"Duplicate RootClientId detected: {root.RootClientId}"
                 )
-            if root.root_sequence in root_sequences:
+            roots_by_id[root.RootClientId] = root
+            row_sequences_by_root[root.RootClientId] = set()
+
+        for row in self.rows:
+            if row.RootClientId not in roots_by_id:
                 raise BomIntakePayloadError(
-                    f"Duplicate RootSequence detected: {root.root_sequence}"
+                    f"BOM row references unknown RootClientId: {row.RootClientId}"
                 )
-
-            root_identity = (
-                root.customer_name,
-                root.level_0_part_number,
-                root.revision,
-            )
-            if root_identity in roots_by_identity:
-                raise BomIntakePayloadError(
-                    "Duplicate root identity detected in upload: "
-                    f"{root.customer_name} / {root.level_0_part_number} / {root.revision}"
-                )
-
-            roots_by_id[root.root_client_id] = root
-            roots_by_identity.add(root_identity)
-            root_sequences.add(root.root_sequence)
-
-        row_sequences_by_root: dict[str, set[int]] = {
-            root_id: set() for root_id in roots_by_id
-        }
-        has_level_0_row_by_root: dict[str, bool] = {
-            root_id: False for root_id in roots_by_id
-        }
-
-        for row in self.bom_rows:
-            root = roots_by_id.get(row.root_client_id)
-            if root is None:
-                raise BomIntakePayloadError(
-                    f"BOM row references unknown RootClientId: {row.root_client_id}"
-                )
-
-            existing_sequences = row_sequences_by_root[row.root_client_id]
-            if row.row_sequence in existing_sequences:
+            if row.RowSequence in row_sequences_by_root[row.RootClientId]:
                 raise BomIntakePayloadError(
                     "Duplicate RowSequence detected within RootClientId "
-                    f"{row.root_client_id}: {row.row_sequence}"
+                    f"{row.RootClientId}: {row.RowSequence}"
                 )
-            existing_sequences.add(row.row_sequence)
-
-            if row.is_level_0:
-                has_level_0_row_by_root[row.root_client_id] = True
-                if row.part_number != root.level_0_part_number:
-                    raise BomIntakePayloadError(
-                        "Level 0 row PartNumber does not match root candidate "
-                        f"for RootClientId {row.root_client_id}."
-                    )
-                if row.revision != root.revision:
-                    raise BomIntakePayloadError(
-                        "Level 0 row Revision does not match root candidate "
-                        f"for RootClientId {row.root_client_id}."
-                    )
+            row_sequences_by_root[row.RootClientId].add(row.RowSequence)
 
         for root_client_id, sequences in row_sequences_by_root.items():
             if not sequences:
                 raise BomIntakePayloadError(
                     f"RootClientId {root_client_id} has no BOM rows."
                 )
-            if 1 not in sequences:
-                raise BomIntakePayloadError(
-                    f"RootClientId {root_client_id} is missing RowSequence 1."
-                )
-            expected_sequences = set(range(1, len(sequences) + 1))
-            if sequences != expected_sequences:
-                raise BomIntakePayloadError(
-                    "RowSequence values must be contiguous within RootClientId "
-                    f"{root_client_id}."
-                )
-            if not has_level_0_row_by_root[root_client_id]:
-                raise BomIntakePayloadError(
-                    f"RootClientId {root_client_id} is missing a level 0 BOM row."
-                )
 
-    def to_sql_payload(self) -> dict[str, object]:
+    def process_input(self, bom_intake_id: int) -> ProcessStandardizedBomIntakeInput:
+        return ProcessStandardizedBomIntakeInput(
+            BomIntakeId=bom_intake_id,
+            DetectedBy=self.detected_by,
+        )
+
+    def to_preview_dict(self) -> dict[str, object]:
         return {
-            "Header": self.metadata.to_sql_params(),
-            "RootCandidates": [root.to_dict() for root in self.root_candidates],
-            "BomRows": [row.to_dict() for row in self.bom_rows],
+            "createProc": {
+                "procedure": "dbo.usp_BOM_Intake_Create",
+                "params": self.create_input.to_dict(),
+            },
+            "processStandardizedProc": {
+                "procedure": "dbo.usp_BOM_Intake_ProcessStandardized",
+                "params": {
+                    "BomIntakeId": None,
+                    "DetectedBy": self.detected_by,
+                },
+                "roots": [root.to_dict() for root in self.roots],
+                "rows": [row.to_dict() for row in self.rows],
+            },
         }
 
 
@@ -440,72 +214,72 @@ def build_bom_intake_payload(
     if not standardized_rows:
         raise BomIntakePayloadError("At least one standardized BOM row is required.")
 
-    root_candidates: list[BomRootCandidate] = []
-    bom_rows: list[BomUploadRow] = []
+    roots: list[BomIntakeRootRow] = []
+    bom_rows: list[BomIntakeRow] = []
     active_root_client_id: str | None = None
     active_row_sequence = 0
     root_sequence = 0
 
     for row in standardized_rows:
-        if row.is_level_0:
-            revision = _normalize_required_text(row.revision, "Revision")
+        if row.is_root_row:
+            revision = _normalize_required_text(row.revision, "revision")
             root_sequence += 1
             active_row_sequence = 0
             active_root_client_id = f"R{root_sequence}"
-            root_candidates.append(
-                BomRootCandidate(
-                    root_client_id=active_root_client_id,
-                    root_sequence=root_sequence,
-                    source_row_number=row.source_row_number,
-                    customer_name=metadata.customer_name,
-                    level_0_part_number=row.part_number,
-                    revision=revision,
-                    root_description=row.description,
-                    root_item_number=row.item_number,
-                    root_quantity=row.quantity,
-                    root_uom=row.uom,
-                    root_make_buy=row.make_buy,
-                    root_mfr=row.mfr,
-                    root_mfr_number=row.mfr_number,
+            roots.append(
+                BomIntakeRootRow(
+                    RootClientId=active_root_client_id,
+                    RootSequence=root_sequence,
+                    SourceRowNumber=row.source_row_number,
+                    CustomerName=metadata.customer_name,
+                    Level0PartNumber=row.part_number,
+                    Revision=revision,
+                    RootDescription=row.description,
+                    RootItemNumber=row.item_number,
+                    RootQuantity=row.quantity,
+                    RootUOM=row.uom,
+                    RootMakeBuy=row.make_buy,
+                    RootMFR=row.mfr,
+                    RootMFRNumber=row.mfr_number,
                 )
             )
 
         if active_root_client_id is None:
             raise BomIntakePayloadError(
                 "Every BOM row must belong to a detected root. "
-                f"SourceRowNumber {row.source_row_number} appears before the first level 0 row."
+                f"source_row_number {row.source_row_number} appears before the first root row."
             )
 
         active_row_sequence += 1
         bom_rows.append(
-            BomUploadRow(
-                root_client_id=active_root_client_id,
-                row_sequence=active_row_sequence,
-                source_row_number=row.source_row_number,
-                original_value=row.original_value,
-                parent_part=row.parent_part,
-                part_number=row.part_number,
-                indented_part_number=row.indented_part_number,
-                bom_level=row.bom_level,
-                description=row.description,
-                revision=row.revision,
-                quantity=row.quantity,
-                uom=row.uom,
-                item_number=row.item_number,
-                make_buy=row.make_buy,
-                mfr=row.mfr,
-                mfr_number=row.mfr_number,
-                lead_time_days=row.lead_time_days,
-                cost=row.cost,
-                is_level_0=row.is_level_0,
-                validation_message=row.validation_message,
+            BomIntakeRow(
+                RootClientId=active_root_client_id,
+                RowSequence=active_row_sequence,
+                SourceRowNumber=row.source_row_number,
+                OriginalValue=row.original_value,
+                ParentPart=row.parent_part,
+                PartNumber=row.part_number,
+                IndentedPartNumber=row.indented_part_number,
+                BomLevel=row.bom_level,
+                Description=row.description,
+                Revision=row.revision,
+                Quantity=row.quantity,
+                UOM=row.uom,
+                ItemNumber=row.item_number,
+                MakeBuy=row.make_buy,
+                MFR=row.mfr,
+                MFRNumber=row.mfr_number,
+                LeadTimeDays=row.lead_time_days,
+                Cost=row.cost,
+                ValidationMessage=row.validation_message,
             )
         )
 
     return BomIntakePayload(
-        metadata=metadata,
-        root_candidates=root_candidates,
-        bom_rows=bom_rows,
+        create_input=metadata.to_create_input(),
+        detected_by=metadata.uploaded_by,
+        roots=roots,
+        rows=bom_rows,
     )
 
 
@@ -519,15 +293,11 @@ def _normalize_required_text(value: str | None, field_name: str) -> str:
 def _normalize_optional_text(value: str | None) -> str | None:
     if value is None:
         return None
+    stripped = value.strip()
+    return stripped if stripped else None
 
-    normalized_value = str(value).strip()
-    if not normalized_value:
+
+def _normalize_revision(value: str | None) -> str | None:
+    if value is None:
         return None
-    return normalized_value
-
-
-def _normalize_revision(value: str | None) -> str:
-    normalized_value = _normalize_optional_text(value)
-    if normalized_value is None:
-        return ""
-    return normalized_value
+    return value.strip()

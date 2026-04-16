@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from http import HTTPStatus
 from pathlib import Path
 from typing import Callable
+from urllib.parse import parse_qs
 
 from src.config import AppConfig, SqlServerConfig, SqlServerConfigError
 from src.services.bom_intake_db import (
@@ -194,10 +195,12 @@ def _handle_bom_intake_api(
         request_body = _parse_json_request(environ)
         header = request_body.get("header")
         standardized_bom_rows = request_body.get("standardizedBomRows")
+        dry_run = _resolve_bom_intake_dry_run(environ, request_body)
 
         result = service.process_standardized_upload(
             header_data=header,
             standardized_rows_data=standardized_bom_rows,
+            dry_run=dry_run,
         )
         return _respond_json(
             start_response,
@@ -273,6 +276,13 @@ def _parse_json_request(environ) -> dict[str, object]:
 
 
 def _serialize_bom_intake_result(result: dict[str, object]) -> dict[str, object]:
+    if result.get("DryRun") is True:
+        return {
+            "dryRun": True,
+            "previewPath": result.get("PreviewPath"),
+            "payload": result.get("Payload"),
+        }
+
     summary = result.get("Summary", {})
     root_results = result.get("RootResults", [])
     if not isinstance(summary, dict):
@@ -303,6 +313,27 @@ def _serialize_bom_intake_result(result: dict[str, object]) -> dict[str, object]
             for root_result in root_results
         ],
     }
+
+
+def _resolve_bom_intake_dry_run(environ, request_body: dict[str, object]) -> bool:
+    query_values = parse_qs(environ.get("QUERY_STRING", ""), keep_blank_values=True)
+    if "dry_run" in query_values:
+        return _parse_bool_value(query_values["dry_run"][-1], "dry_run")
+    if "dryRun" in request_body:
+        return _parse_bool_value(request_body["dryRun"], "dryRun")
+    return False
+
+
+def _parse_bool_value(value: object, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError(f"{field_name} must be a boolean value.")
 
 
 def _group_processed_files_by_type(

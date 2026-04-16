@@ -1,4 +1,7 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from src.services.bom_intake_service import BomIntakeRequestError, BomIntakeService
 
@@ -17,9 +20,20 @@ class FakeDbService:
         }
         self.calls: list[dict[str, object]] = []
 
-    def create_and_process_intake(self, **kwargs):
-        self.calls.append(kwargs)
+    def create_and_process_intake(self, *, payload):
+        self.calls.append({"payload": payload})
         return self.result
+
+
+def _header() -> dict[str, object]:
+    return {
+        "customer_name": "ACME",
+        "source_file_name": "bom.xlsx",
+        "source_file_path": "/tmp/bom.xlsx",
+        "source_sheet_name": "BOM",
+        "uploaded_by": "estimator",
+        "source_type": "standardized_upload",
+    }
 
 
 def _standardized_request_rows() -> list[dict[str, object]]:
@@ -41,7 +55,6 @@ def _standardized_request_rows() -> list[dict[str, object]]:
             "mfr_number": None,
             "lead_time_days": None,
             "cost": None,
-            "is_level_0": True,
             "validation_message": None,
         },
         {
@@ -61,7 +74,6 @@ def _standardized_request_rows() -> list[dict[str, object]]:
             "mfr_number": None,
             "lead_time_days": None,
             "cost": None,
-            "is_level_0": False,
             "validation_message": None,
         },
     ]
@@ -73,80 +85,56 @@ class BomIntakeServiceTests(unittest.TestCase):
         service = BomIntakeService(db_service=db_service)
 
         result = service.process_standardized_upload(
-            header_data={
-                "customer_name": "ACME",
-                "source_file_name": "bom.xlsx",
-                "uploaded_by": "estimator",
-                "source_type": "standardized_upload",
-            },
+            header_data=_header(),
             standardized_rows_data=_standardized_request_rows(),
         )
 
         self.assertEqual(result["Summary"]["BomIntakeId"], 101)
         self.assertEqual(len(db_service.calls), 1)
-        self.assertEqual(db_service.calls[0]["header"]["CustomerName"], "ACME")
-        self.assertEqual(len(db_service.calls[0]["root_candidates"]), 1)
-        self.assertEqual(len(db_service.calls[0]["bom_rows"]), 2)
-        self.assertEqual(db_service.calls[0]["detected_by"], "estimator")
+        payload = db_service.calls[0]["payload"]
+        self.assertEqual(payload.create_input.CustomerName, "ACME")
+        self.assertEqual(len(payload.roots), 1)
+        self.assertEqual(len(payload.rows), 2)
+        self.assertEqual(payload.detected_by, "estimator")
 
-    def test_rejects_malformed_request_before_db_call(self) -> None:
+    def test_rejects_extra_request_fields_before_db_call(self) -> None:
         db_service = FakeDbService()
         service = BomIntakeService(db_service=db_service)
 
         with self.assertRaises(BomIntakeRequestError):
             service.process_standardized_upload(
-                header_data={"customer_name": "ACME"},
+                header_data={**_header(), "unexpected": "value"},
                 standardized_rows_data=_standardized_request_rows(),
+            )
+
+        with self.assertRaises(BomIntakeRequestError):
+            service.process_standardized_upload(
+                header_data=_header(),
+                standardized_rows_data=[
+                    {**_standardized_request_rows()[0], "is_level_0": True}
+                ],
             )
 
         self.assertEqual(db_service.calls, [])
 
-    def test_passes_all_duplicate_result_through(self) -> None:
-        db_service = FakeDbService(
-            result={
-                "Summary": {
-                    "BomIntakeId": 202,
-                    "DetectedRootCount": 2,
-                    "AcceptedRootCount": 0,
-                    "DuplicateRejectedCount": 2,
-                    "FinalIntakeStatus": "duplicates_rejected",
-                },
-                "RootResults": [
-                    {
-                        "RootClientId": "R1",
-                        "DecisionStatus": "duplicate_rejected",
-                    },
-                    {
-                        "RootClientId": "R2",
-                        "DecisionStatus": "duplicate_rejected",
-                    },
-                ],
-            }
-        )
+    def test_dry_run_writes_preview_json_without_db_call(self) -> None:
+        db_service = FakeDbService()
         service = BomIntakeService(db_service=db_service)
 
-        result = service.process_standardized_upload(
-            header_data={
-                "customer_name": "ACME",
-                "source_file_name": "bom.xlsx",
-                "uploaded_by": "estimator",
-            },
-            standardized_rows_data=[
-                _standardized_request_rows()[0],
-                {
-                    **_standardized_request_rows()[0],
-                    "source_row_number": 10,
-                    "part_number": "XYZ-9000",
-                    "indented_part_number": "XYZ-9000",
-                    "revision": "A",
-                    "description": "SECOND ROOT",
-                },
-            ],
-        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            preview_path = Path(temp_dir) / "payload-preview.json"
+            result = service.process_standardized_upload(
+                header_data=_header(),
+                standardized_rows_data=_standardized_request_rows(),
+                dry_run=True,
+                preview_path=preview_path,
+            )
+            written_payload = json.loads(preview_path.read_text())
 
-        self.assertEqual(result["Summary"]["AcceptedRootCount"], 0)
-        self.assertEqual(result["Summary"]["DuplicateRejectedCount"], 2)
-        self.assertEqual(result["Summary"]["FinalIntakeStatus"], "duplicates_rejected")
+        self.assertTrue(result["DryRun"])
+        self.assertEqual(result["PreviewPath"], str(preview_path))
+        self.assertEqual(written_payload, result["Payload"])
+        self.assertEqual(db_service.calls, [])
 
 
 if __name__ == "__main__":

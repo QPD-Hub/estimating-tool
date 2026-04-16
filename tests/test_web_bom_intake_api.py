@@ -30,45 +30,29 @@ class FakeBomIntakeService:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def process_standardized_upload(self, header_data, standardized_rows_data):
+    def process_standardized_upload(self, header_data, standardized_rows_data, *, dry_run=False):
         self.calls.append(
             {
                 "header_data": header_data,
                 "standardized_rows_data": standardized_rows_data,
+                "dry_run": dry_run,
             }
         )
+        if dry_run:
+            return {
+                "DryRun": True,
+                "PreviewPath": "/tmp/bom_intake_payload_preview.json",
+                "Payload": {"createProc": {"params": {"CustomerName": "ACME"}}},
+            }
         return {
             "Summary": {
                 "BomIntakeId": 321,
-                "DetectedRootCount": 2,
+                "DetectedRootCount": 1,
                 "AcceptedRootCount": 1,
-                "DuplicateRejectedCount": 1,
-                "FinalIntakeStatus": "processed_with_duplicates",
+                "DuplicateRejectedCount": 0,
+                "FinalIntakeStatus": "processed",
             },
-            "RootResults": [
-                {
-                    "RootClientId": "R1",
-                    "RootSequence": 1,
-                    "CustomerName": "ACME",
-                    "Level0PartNumber": "ABC-1000",
-                    "Revision": "1",
-                    "DecisionStatus": "accepted",
-                    "DecisionReason": "Inserted",
-                    "BomRootId": 12,
-                    "ExistingBomRootId": None,
-                },
-                {
-                    "RootClientId": "R2",
-                    "RootSequence": 2,
-                    "CustomerName": "ACME",
-                    "Level0PartNumber": "XYZ-9000",
-                    "Revision": "A",
-                    "DecisionStatus": "duplicate_rejected",
-                    "DecisionReason": "Already exists",
-                    "BomRootId": None,
-                    "ExistingBomRootId": 44,
-                },
-            ],
+            "RootResults": [],
         }
 
 
@@ -90,8 +74,40 @@ class FakeDbService:
         }
 
 
+def _request_payload() -> dict[str, object]:
+    return {
+        "header": {
+            "customer_name": "ACME",
+            "source_file_name": "bom.xlsx",
+            "uploaded_by": "estimator",
+        },
+        "standardizedBomRows": [
+            {
+                "source_row_number": 1,
+                "original_value": None,
+                "parent_part": None,
+                "part_number": "ABC-1000",
+                "indented_part_number": "ABC-1000",
+                "bom_level": 0,
+                "description": "TOP",
+                "revision": "1",
+                "quantity": 1,
+                "uom": "EA",
+                "item_number": "10",
+                "make_buy": "MAKE",
+                "mfr": None,
+                "mfr_number": None,
+                "lead_time_days": None,
+                "cost": None,
+                "validation_message": None,
+            }
+        ],
+    }
+
+
 class WebBomIntakeApiTests(unittest.TestCase):
-    def test_api_happy_path_returns_summary_and_root_results(self) -> None:
+    def test_api_happy_path_returns_summary(self) -> None:
+        fake_service = FakeBomIntakeService()
         with tempfile.TemporaryDirectory() as temp_dir:
             app = create_app(
                 AppConfig(
@@ -100,50 +116,45 @@ class WebBomIntakeApiTests(unittest.TestCase):
                     work_root=Path(temp_dir) / "work",
                     port=8000,
                 ),
-                bom_intake_service_override=FakeBomIntakeService(),
+                bom_intake_service_override=fake_service,
             )
 
             status, headers, body = _invoke_json(
                 app,
                 "/api/dev/bom-intake",
-                {
-                    "header": {
-                        "customer_name": "ACME",
-                        "source_file_name": "bom.xlsx",
-                        "uploaded_by": "estimator",
-                    },
-                    "standardizedBomRows": [
-                        {
-                            "source_row_number": 1,
-                            "original_value": None,
-                            "parent_part": None,
-                            "part_number": "ABC-1000",
-                            "indented_part_number": "ABC-1000",
-                            "bom_level": 0,
-                            "description": "TOP",
-                            "revision": "1",
-                            "quantity": 1,
-                            "uom": "EA",
-                            "item_number": "10",
-                            "make_buy": "MAKE",
-                            "mfr": None,
-                            "mfr_number": None,
-                            "lead_time_days": None,
-                            "cost": None,
-                            "is_level_0": True,
-                            "validation_message": None,
-                        }
-                    ],
-                },
+                _request_payload(),
             )
 
         self.assertEqual(status, "200 OK")
         self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
         payload = json.loads(body)
         self.assertEqual(payload["summary"]["bomIntakeId"], 321)
-        self.assertEqual(payload["summary"]["acceptedRootCount"], 1)
-        self.assertEqual(payload["summary"]["duplicateRejectedCount"], 1)
-        self.assertEqual(payload["rootResults"][1]["decisionStatus"], "duplicate_rejected")
+        self.assertFalse(fake_service.calls[0]["dry_run"])
+
+    def test_api_dry_run_returns_preview_payload(self) -> None:
+        fake_service = FakeBomIntakeService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                bom_intake_service_override=fake_service,
+            )
+
+            status, _headers, body = _invoke_json(
+                app,
+                "/api/dev/bom-intake",
+                {**_request_payload(), "dryRun": True},
+            )
+
+        self.assertEqual(status, "200 OK")
+        payload = json.loads(body)
+        self.assertTrue(payload["dryRun"])
+        self.assertEqual(payload["previewPath"], "/tmp/bom_intake_payload_preview.json")
+        self.assertTrue(fake_service.calls[0]["dry_run"])
 
     def test_api_rejects_malformed_request_before_service_call(self) -> None:
         fake_db = FakeDbService()

@@ -1,110 +1,143 @@
+import json
 import unittest
+from pathlib import Path
 
+from src.contracts.bom_intake import (
+    CREATE_PROC_SCALAR_FIELDS,
+    PROCESS_PROC_SCALAR_FIELDS,
+    ROOT_TVP_FIELDS,
+    ROW_TVP_FIELDS,
+)
 from src.services.bom_intake_payload import (
     BomIntakeMetadata,
-    BomIntakePayload,
     BomIntakePayloadError,
-    BomRootCandidate,
-    BomUploadRow,
     StandardizedBomRow,
     build_bom_intake_payload,
 )
 
 
+FIXTURE_PATH = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "bom_intake"
+    / "standardized_payload_example.json"
+)
+
+DB_OWNED_FIELDS = {
+    "IsLevel0",
+    "BomRootId",
+    "RowGuid",
+    "ParentBomRowId",
+    "RowPath",
+    "RowStatus",
+    "CreatedAt",
+    "ModifiedAt",
+    "NormalizedCustomerName",
+    "NormalizedPartNumber",
+    "NormalizedRevision",
+    "DecisionStatus",
+    "DecisionReason",
+    "ExistingBomRootId",
+}
+
+
+def _metadata() -> BomIntakeMetadata:
+    return BomIntakeMetadata(
+        customer_name=" ACME ",
+        quote_number=" Q-100 ",
+        source_file_name=" customer-bom.xlsx ",
+        source_file_path=" /tmp/customer-bom.xlsx ",
+        source_sheet_name=" BOM ",
+        source_type=" standardized_upload ",
+        uploaded_by=" estimator ",
+        parser_version=" v1 ",
+        intake_notes=" fixture preview ",
+    )
+
+
+def _standardized_rows() -> list[StandardizedBomRow]:
+    return [
+        StandardizedBomRow(
+            source_row_number=1,
+            original_value=None,
+            parent_part=None,
+            part_number="ABC-1000",
+            indented_part_number="ABC-1000",
+            bom_level=0,
+            description="TOP",
+            revision="1",
+            quantity=1,
+            uom="EA",
+            item_number="10",
+            make_buy="MAKE",
+            mfr=None,
+            mfr_number=None,
+            lead_time_days=None,
+            cost=None,
+        ),
+        StandardizedBomRow(
+            source_row_number=2,
+            original_value=None,
+            parent_part="ABC-1000",
+            part_number="COMP-200",
+            indented_part_number="COMP-200",
+            bom_level=1,
+            description="COMPONENT",
+            revision="",
+            quantity=2,
+            uom="EA",
+            item_number="20",
+            make_buy="BUY",
+            mfr="MCMASTER",
+            mfr_number="91234A123",
+            lead_time_days=7,
+            cost=1.25,
+        ),
+    ]
+
+
 class BuildBomIntakePayloadTests(unittest.TestCase):
-    def test_builds_roots_and_rows_from_level_zero_boundaries(self) -> None:
-        metadata = BomIntakeMetadata(
-            customer_name=" ACME ",
-            source_file_name=" customer-bom.xlsx ",
-            uploaded_by=" estimators@example.com ",
-            quote_number=" Q-100 ",
+    def test_matches_fixture_preview_shape(self) -> None:
+        payload = build_bom_intake_payload(_metadata(), _standardized_rows())
+
+        self.assertEqual(payload.to_preview_dict(), json.loads(FIXTURE_PATH.read_text()))
+
+    def test_contract_field_names_match_sql_contract(self) -> None:
+        payload = build_bom_intake_payload(_metadata(), _standardized_rows())
+        preview = payload.to_preview_dict()
+
+        self.assertEqual(
+            tuple(preview["createProc"]["params"].keys()),
+            CREATE_PROC_SCALAR_FIELDS,
+        )
+        self.assertEqual(PROCESS_PROC_SCALAR_FIELDS, ("BomIntakeId", "DetectedBy"))
+        self.assertEqual(
+            tuple(preview["processStandardizedProc"]["roots"][0].keys()),
+            ROOT_TVP_FIELDS,
+        )
+        self.assertEqual(
+            tuple(preview["processStandardizedProc"]["rows"][0].keys()),
+            ROW_TVP_FIELDS,
         )
 
-        payload = build_bom_intake_payload(
-            metadata,
-            standardized_rows=[
-                StandardizedBomRow(
-                    source_row_number=1,
-                    original_value=None,
-                    parent_part=None,
-                    part_number="ABC-1000",
-                    indented_part_number="ABC-1000",
-                    bom_level=0,
-                    description="TOP ASSEMBLY",
-                    revision=" 1 ",
-                    quantity=1,
-                    uom="EA",
-                    item_number="10",
-                    make_buy="MAKE",
-                    mfr=None,
-                    mfr_number=None,
-                    lead_time_days=None,
-                    cost=None,
-                ),
-                StandardizedBomRow(
-                    source_row_number=2,
-                    original_value=None,
-                    parent_part="ABC-1000",
-                    part_number="COMP-200",
-                    indented_part_number="  COMP-200",
-                    bom_level=1,
-                    description="COMPONENT",
-                    revision="",
-                    quantity=2,
-                    uom="EA",
-                    item_number="20",
-                    make_buy="BUY",
-                    mfr="MCMASTER",
-                    mfr_number="91234A123",
-                    lead_time_days=7,
-                    cost=1.25,
-                ),
-                StandardizedBomRow(
-                    source_row_number=10,
-                    original_value=None,
-                    parent_part=None,
-                    part_number="XYZ-9000",
-                    indented_part_number="XYZ-9000",
-                    bom_level=0,
-                    description="SECOND ROOT",
-                    revision="A",
-                    quantity=1,
-                    uom="EA",
-                    item_number="10",
-                    make_buy="MAKE",
-                    mfr=None,
-                    mfr_number=None,
-                    lead_time_days=None,
-                    cost=None,
-                ),
-            ],
-        )
+    def test_preview_payload_excludes_db_owned_fields(self) -> None:
+        payload = build_bom_intake_payload(_metadata(), _standardized_rows())
+        preview = payload.to_preview_dict()
 
-        self.assertEqual(payload.metadata.customer_name, "ACME")
-        self.assertEqual(len(payload.root_candidates), 2)
-        self.assertEqual(payload.root_candidates[0].root_client_id, "R1")
-        self.assertEqual(payload.root_candidates[1].root_client_id, "R2")
-        self.assertEqual(payload.root_candidates[0].revision, "1")
-        self.assertEqual(payload.bom_rows[0].row_sequence, 1)
-        self.assertEqual(payload.bom_rows[1].row_sequence, 2)
-        self.assertEqual(payload.bom_rows[2].row_sequence, 1)
+        preview_keys = set(preview["createProc"]["params"])
+        preview_keys.update(preview["processStandardizedProc"]["params"])
+        for root in preview["processStandardizedProc"]["roots"]:
+            preview_keys.update(root)
+        for row in preview["processStandardizedProc"]["rows"]:
+            preview_keys.update(row)
 
-        sql_payload = payload.to_sql_payload()
-        self.assertEqual(sql_payload["Header"]["CustomerName"], "ACME")
-        self.assertEqual(sql_payload["RootCandidates"][0]["Level0PartNumber"], "ABC-1000")
-        self.assertEqual(sql_payload["BomRows"][1]["Revision"], "")
+        self.assertTrue(DB_OWNED_FIELDS.isdisjoint(preview_keys))
 
-    def test_rejects_rows_before_first_level_zero_root(self) -> None:
-        metadata = BomIntakeMetadata(
-            customer_name="ACME",
-            source_file_name="customer-bom.xlsx",
-            uploaded_by="estimator",
-        )
-
+    def test_rejects_rows_before_first_root(self) -> None:
         with self.assertRaises(BomIntakePayloadError):
             build_bom_intake_payload(
-                metadata,
-                standardized_rows=[
+                _metadata(),
+                [
                     StandardizedBomRow(
                         source_row_number=2,
                         original_value=None,
@@ -123,70 +156,6 @@ class BuildBomIntakePayloadTests(unittest.TestCase):
                         lead_time_days=None,
                         cost=None,
                     )
-                ],
-            )
-
-
-class BomIntakePayloadValidationTests(unittest.TestCase):
-    def test_rejects_duplicate_row_sequence_within_root(self) -> None:
-        with self.assertRaises(BomIntakePayloadError):
-            BomIntakePayload(
-                metadata=BomIntakeMetadata(
-                    customer_name="ACME",
-                    source_file_name="customer-bom.xlsx",
-                    uploaded_by="estimator",
-                ),
-                root_candidates=[
-                    BomRootCandidate(
-                        root_client_id="R1",
-                        root_sequence=1,
-                        source_row_number=1,
-                        customer_name="ACME",
-                        level_0_part_number="ABC-1000",
-                        revision="1",
-                    )
-                ],
-                bom_rows=[
-                    BomUploadRow(
-                        root_client_id="R1",
-                        row_sequence=1,
-                        source_row_number=1,
-                        original_value=None,
-                        parent_part=None,
-                        part_number="ABC-1000",
-                        indented_part_number="ABC-1000",
-                        bom_level=0,
-                        description="TOP",
-                        revision="1",
-                        quantity=1,
-                        uom="EA",
-                        item_number="10",
-                        make_buy="MAKE",
-                        mfr=None,
-                        mfr_number=None,
-                        lead_time_days=None,
-                        cost=None,
-                    ),
-                    BomUploadRow(
-                        root_client_id="R1",
-                        row_sequence=1,
-                        source_row_number=2,
-                        original_value=None,
-                        parent_part="ABC-1000",
-                        part_number="COMP-200",
-                        indented_part_number="COMP-200",
-                        bom_level=1,
-                        description="COMPONENT",
-                        revision="",
-                        quantity=2,
-                        uom="EA",
-                        item_number="20",
-                        make_buy="BUY",
-                        mfr=None,
-                        mfr_number=None,
-                        lead_time_days=None,
-                        cost=None,
-                    ),
                 ],
             )
 

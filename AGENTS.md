@@ -312,3 +312,38 @@ Choose the option that:
 
 \- supports future profile-based processing
 
+# Repository Agent Rules
+
+## BOM intake SQL contract
+
+The SQL source of truth for BOM intake lives in:
+
+- `/db/procedures/usp_BOM_Intake_Create.sql`
+- `/db/procedures/usp_BOM_Intake_ProcessStandardized.sql`
+- `/db/types/udtt_BOM_Intake_Root.sql`
+- `/db/types/udtt_BOM_Intake_Row.sql`
+- `/db/tables/BOM_Row.sql`
+
+### Rules
+1. Never invent SQL payload fields that are not explicitly defined in the stored procedure parameters or TVP definitions.
+2. App-side request models must match SQL TVP columns exactly by name.
+3. The app is a transport and validation layer. SQL owns derived fields and workflow logic.
+4. For BOM intake, the app must not send DB-derived fields such as:
+   - `IsLevel0`
+   - `BomRootId`
+   - `BomIntakeId` inside TVP rows
+   - `RowGuid`
+   - `ParentBomRowId`
+   - `RowPath`
+   - `RowStatus`
+   - `CreatedAt`
+   - `ModifiedAt`
+   - normalized/decision fields
+5. `IsLevel0` is derived by SQL during insert into `dbo.BOM_Row` and must not be included in the app payload.
+6. Any change to a BOM intake proc or TVP must also update:
+   - `/db/contracts/bom-intake-contract.md`
+   - `/src/contracts/bom_intake.py`
+   - related tests/fixtures
+   - the SQL execution layer that builds TVP rows
+7. Before changing BOM intake app code, inspect the SQL contract files first.
+
