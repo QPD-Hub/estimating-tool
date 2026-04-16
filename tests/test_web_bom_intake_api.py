@@ -26,8 +26,6 @@ from src.config import AppConfig
 from src.services.bom_intake_service import BomIntakeRequestError, BomIntakeService
 from src.services.document_intake_service import (
     DocumentIntakeResult,
-    PartDestinationResult,
-    ProcessedFileResult,
 )
 from src.web import ViewState, create_app, render_page
 
@@ -258,43 +256,43 @@ class WebBomIntakeApiTests(unittest.TestCase):
         )
         result = DocumentIntakeResult(
             customer_name="ACME",
+            part_number="PART-100",
             sanitized_customer_folder_name="ACME",
-            top_level_parts=["PART-100"],
-            automation_customer_path=Path("/tmp/automation/ACME"),
-            working_customer_path=Path("/tmp/work/ACME"),
-            part_destinations=[
-                PartDestinationResult(
-                    part_name="PART-100",
-                    sanitized_part_folder_name="PART-100",
-                    automation_path=Path("/tmp/automation/ACME/PART-100"),
-                    working_path=Path("/tmp/work/ACME/PART-100"),
-                )
-            ],
+            sanitized_part_folder_name="PART-100",
+            automation_path=Path("/tmp/automation/ACME/PART-100"),
+            working_path=Path("/tmp/work/ACME/PART-100"),
+            uploaded_files_count=3,
             processed_files=[
-                ProcessedFileResult(filename="drawing.pdf", size_bytes=12),
-                ProcessedFileResult(filename="bom.xlsx", size_bytes=24),
-                ProcessedFileResult(filename="notes.pdf", size_bytes=8),
-                ProcessedFileResult(filename="README", size_bytes=4),
+                "README",
+                "bom.xlsx",
+                "drawing.pdf",
+                "notes.pdf",
             ],
-            copied_file_count=8,
-            failed_files=[],
+            extension_summary={
+                ".pdf": 2,
+                ".xlsx": 1,
+                "[no extension]": 1,
+            },
         )
 
         page = render_page(
             config,
             ViewState(
                 customer="ACME",
-                top_level_parts=["PART-100"],
-                message="Processed 4 file(s) into 1 top-level part folder(s) for ACME.",
+                part_number="PART-100",
+                message="Processed 4 file(s) for ACME / PART-100 into both configured roots.",
                 result=result,
             ),
         )
 
-        self.assertIn("Doc Package Overview", page)
-        self.assertIn("Processed file counts grouped by extension.", page)
+        self.assertIn("Processed Document Overview", page)
+        self.assertIn("Processed file counts grouped by lowercase extension.", page)
+        self.assertIn("Processed Filenames", page)
         self.assertIn("<span>.pdf</span><strong>2</strong>", page)
         self.assertIn("<span>.xlsx</span><strong>1</strong>", page)
-        self.assertIn("<span>No extension</span><strong>1</strong>", page)
+        self.assertIn("<span>[no extension]</span><strong>1</strong>", page)
+        self.assertIn("Automation destination", page)
+        self.assertIn("Working destination", page)
 
     def test_api_happy_path_returns_summary(self) -> None:
         fake_service = FakeBomIntakeService()

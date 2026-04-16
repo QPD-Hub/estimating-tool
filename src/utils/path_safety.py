@@ -50,6 +50,14 @@ def sanitize_top_level_part_folder_name(part_name: str) -> str:
     )
 
 
+def sanitize_part_folder_name(part_name: str) -> str:
+    return _sanitize_folder_name(
+        part_name,
+        empty_message="Part Number is invalid after removing illegal path characters.",
+        reserved_message_prefix="Part folder name is not allowed on the filesystem",
+    )
+
+
 def validate_upload_filename(filename: str) -> None:
     if not filename or not filename.strip():
         raise PathValidationError("One of the uploaded files is missing a filename.")

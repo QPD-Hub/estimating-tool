@@ -11,8 +11,8 @@ from src.services.bom_workbook import BomWorkbookError, extract_bom_identity
 from src.utils.path_safety import (
     PathValidationError,
     sanitize_customer_folder_name,
+    sanitize_part_folder_name,
     sanitize_processed_filename,
-    sanitize_top_level_part_folder_name,
     validate_upload_filename,
 )
 
@@ -30,36 +30,16 @@ class UploadedFile:
 
 
 @dataclass(frozen=True)
-class ProcessedFileResult:
-    filename: str
-    size_bytes: int
-
-
-@dataclass(frozen=True)
-class PartDestinationResult:
-    part_name: str
+class DocumentIntakeResult:
+    customer_name: str
+    part_number: str
+    sanitized_customer_folder_name: str
     sanitized_part_folder_name: str
     automation_path: Path
     working_path: Path
-
-
-@dataclass(frozen=True)
-class FailedFileResult:
-    filename: str
-    reason: str
-
-
-@dataclass(frozen=True)
-class DocumentIntakeResult:
-    customer_name: str
-    sanitized_customer_folder_name: str
-    top_level_parts: list[str]
-    automation_customer_path: Path
-    working_customer_path: Path
-    part_destinations: list[PartDestinationResult] = field(default_factory=list)
-    processed_files: list[ProcessedFileResult] = field(default_factory=list)
-    copied_file_count: int = 0
-    failed_files: list[FailedFileResult] = field(default_factory=list)
+    uploaded_files_count: int
+    processed_files: list[str] = field(default_factory=list)
+    extension_summary: dict[str, int] = field(default_factory=dict)
 
 
 class DocumentIntakeService:
@@ -70,133 +50,115 @@ class DocumentIntakeService:
     def intake_documents(
         self,
         customer_name: str,
-        top_level_parts: Iterable[str],
+        part_number: str,
         uploaded_files: Iterable[UploadedFile],
     ) -> DocumentIntakeResult:
         normalized_customer_name = customer_name.strip()
         if not normalized_customer_name:
             raise DocumentIntakeError("Customer is required.")
 
-        normalized_parts = [part.strip() for part in top_level_parts if part.strip()]
-        if not normalized_parts:
-            raise DocumentIntakeError("At least one Top Level Part is required.")
+        normalized_part_number = part_number.strip()
+        if not normalized_part_number:
+            raise DocumentIntakeError("Part Number is required.")
 
         files = list(uploaded_files)
         if not files:
             raise DocumentIntakeError("At least one file is required.")
 
         try:
-            customer_folder_name = sanitize_customer_folder_name(normalized_customer_name)
-            sanitized_parts = self._sanitize_top_level_parts(normalized_parts)
+            sanitized_customer_folder_name = sanitize_customer_folder_name(
+                normalized_customer_name
+            )
+            sanitized_part_folder_name = sanitize_part_folder_name(
+                normalized_part_number
+            )
             processed_files = self._build_processed_files(files)
         except PathValidationError as exc:
             raise DocumentIntakeError(str(exc)) from exc
 
-        automation_customer_path = self._automation_drop_root / customer_folder_name
-        working_customer_path = self._work_root / customer_folder_name
-        part_destinations = [
-            PartDestinationResult(
-                part_name=part_name,
-                sanitized_part_folder_name=sanitized_part_name,
-                automation_path=automation_customer_path / sanitized_part_name,
-                working_path=working_customer_path / sanitized_part_name,
-            )
-            for part_name, sanitized_part_name in zip(normalized_parts, sanitized_parts)
-        ]
-
-        self._validate_destinations(processed_files, part_destinations)
+        automation_path = (
+            self._automation_drop_root
+            / sanitized_customer_folder_name
+            / sanitized_part_folder_name
+        )
+        working_path = (
+            self._work_root
+            / sanitized_customer_folder_name
+            / sanitized_part_folder_name
+        )
 
         written_paths: list[Path] = []
         created_dirs: list[Path] = []
 
         try:
-            for destination in part_destinations:
-                self._ensure_directory(destination.automation_path, created_dirs)
-                self._ensure_directory(destination.working_path, created_dirs)
+            self._ensure_directory(automation_path, created_dirs)
+            self._ensure_directory(working_path, created_dirs)
 
-                for processed_file in processed_files:
-                    automation_destination = destination.automation_path / processed_file.filename
-                    working_destination = destination.working_path / processed_file.filename
-
-                    self._copy_to_destination(
-                        processed_file.content,
-                        automation_destination,
-                    )
-                    written_paths.append(automation_destination)
-
-                    self._copy_to_destination(
-                        processed_file.content,
-                        working_destination,
-                    )
-                    written_paths.append(working_destination)
+            final_processed_files = self._resolve_mirrored_filenames(
+                processed_files,
+                automation_path,
+                working_path,
+            )
+            for processed_file in final_processed_files:
+                self._write_mirrored_file(
+                    processed_file.content,
+                    processed_file.filename,
+                    automation_path,
+                    working_path,
+                    written_paths,
+                )
         except Exception as exc:
             logger.exception(
-                "Document intake copy failed for customer '%s'.",
+                "Document intake processing failed for customer '%s' part '%s'.",
                 normalized_customer_name,
+                normalized_part_number,
             )
             self._cleanup_written_files(written_paths)
             self._cleanup_created_directories(created_dirs)
             raise DocumentIntakeError(
-                "Unable to copy processed files. No files were overwritten."
+                "Unable to process uploaded documents. No existing files were overwritten."
             ) from exc
 
+        processed_filenames = sorted(
+            (processed_file.filename for processed_file in final_processed_files),
+            key=lambda value: (value.casefold(), value),
+        )
         return DocumentIntakeResult(
             customer_name=normalized_customer_name,
-            sanitized_customer_folder_name=customer_folder_name,
-            top_level_parts=sanitized_parts,
-            automation_customer_path=automation_customer_path,
-            working_customer_path=working_customer_path,
-            part_destinations=part_destinations,
-            processed_files=[
-                ProcessedFileResult(
-                    filename=processed_file.filename,
-                    size_bytes=len(processed_file.content),
-                )
-                for processed_file in processed_files
-            ],
-            copied_file_count=len(processed_files) * len(part_destinations) * 2,
-            failed_files=[],
+            part_number=normalized_part_number,
+            sanitized_customer_folder_name=sanitized_customer_folder_name,
+            sanitized_part_folder_name=sanitized_part_folder_name,
+            automation_path=automation_path,
+            working_path=working_path,
+            uploaded_files_count=len(files),
+            processed_files=processed_filenames,
+            extension_summary=self._summarize_extensions(processed_filenames),
         )
-
-    def _sanitize_top_level_parts(self, top_level_parts: list[str]) -> list[str]:
-        sanitized_parts: list[str] = []
-        seen_parts: set[str] = set()
-
-        for part_name in top_level_parts:
-            sanitized_part_name = sanitize_top_level_part_folder_name(part_name)
-            if sanitized_part_name in seen_parts:
-                raise DocumentIntakeError(
-                    f"Duplicate Top Level Part detected after sanitization: {sanitized_part_name}"
-                )
-            seen_parts.add(sanitized_part_name)
-            sanitized_parts.append(sanitized_part_name)
-
-        return sanitized_parts
 
     def _build_processed_files(
         self, uploaded_files: list[UploadedFile]
     ) -> list[_ProcessedFile]:
         processed_files: list[_ProcessedFile] = []
-        seen_filenames: set[str] = set()
 
         for uploaded_file in uploaded_files:
+            validate_upload_filename(uploaded_file.filename)
+
             if self._is_zip_upload(uploaded_file.filename):
-                extracted_files = self._extract_zip_file(uploaded_file)
-                for extracted_file in extracted_files:
-                    self._append_processed_file(
-                        processed_files,
-                        seen_filenames,
-                        extracted_file.filename,
-                        extracted_file.content,
-                    )
+                processed_files.extend(self._extract_zip_file(uploaded_file))
                 continue
 
-            self._append_processed_file(
-                processed_files,
-                seen_filenames,
-                uploaded_file.filename,
-                uploaded_file.content,
+            processed_files.append(
+                _ProcessedFile(
+                    filename=self._resolve_processed_filename(
+                        uploaded_file.filename,
+                        uploaded_file.content,
+                    ),
+                    content=uploaded_file.content,
+                )
             )
+
+        if not processed_files:
+            raise DocumentIntakeError("No processable files were found in the upload.")
 
         return processed_files
 
@@ -212,7 +174,7 @@ class DocumentIntakeService:
 
         with archive:
             for member in archive.infolist():
-                if member.is_dir():
+                if member.is_dir() or self._should_ignore_zip_member(member.filename):
                     continue
 
                 flattened_name = self._flatten_zip_member_name(member.filename)
@@ -220,14 +182,23 @@ class DocumentIntakeService:
                     continue
 
                 try:
+                    validate_upload_filename(flattened_name)
                     file_content = archive.read(member)
+                except PathValidationError as exc:
+                    raise DocumentIntakeError(str(exc)) from exc
                 except BadZipFile as exc:
                     raise DocumentIntakeError(
                         f"Uploaded zip file is invalid or corrupt: {uploaded_file.filename}"
                     ) from exc
 
                 extracted_files.append(
-                    _ProcessedFile(filename=flattened_name, content=file_content)
+                    _ProcessedFile(
+                        filename=self._resolve_processed_filename(
+                            flattened_name,
+                            file_content,
+                        ),
+                        content=file_content,
+                    )
                 )
 
         if not extracted_files:
@@ -237,30 +208,9 @@ class DocumentIntakeService:
 
         return extracted_files
 
-    def _append_processed_file(
-        self,
-        processed_files: list[_ProcessedFile],
-        seen_filenames: set[str],
-        filename: str,
-        content: bytes,
-    ) -> None:
-        validate_upload_filename(filename)
-        processed_filename = self._resolve_processed_filename(filename, content)
-
-        if processed_filename in seen_filenames:
-            raise DocumentIntakeError(
-                "Duplicate processed filename detected after flattening: "
-                f"{processed_filename}"
-            )
-
-        seen_filenames.add(processed_filename)
-        processed_files.append(
-            _ProcessedFile(filename=processed_filename, content=content)
-        )
-
     def _resolve_processed_filename(self, filename: str, content: bytes) -> str:
         if not self._is_bom_workbook_candidate(filename):
-            return filename
+            return sanitize_processed_filename(filename)
 
         try:
             bom_identity = extract_bom_identity(filename, content)
@@ -271,26 +221,80 @@ class DocumentIntakeService:
 
         return sanitize_processed_filename(bom_identity.filename)
 
-    def _validate_destinations(
+    def _resolve_mirrored_filenames(
         self,
         processed_files: list[_ProcessedFile],
-        part_destinations: list[PartDestinationResult],
+        automation_path: Path,
+        working_path: Path,
+    ) -> list[_ProcessedFile]:
+        reserved_names: set[str] = set()
+        final_processed_files: list[_ProcessedFile] = []
+
+        for processed_file in processed_files:
+            resolved_name = self._resolve_available_filename(
+                processed_file.filename,
+                automation_path,
+                working_path,
+                reserved_names,
+            )
+            reserved_names.add(resolved_name.casefold())
+            final_processed_files.append(
+                _ProcessedFile(filename=resolved_name, content=processed_file.content)
+            )
+
+        return final_processed_files
+
+    def _resolve_available_filename(
+        self,
+        filename: str,
+        automation_path: Path,
+        working_path: Path,
+        reserved_names: set[str],
+    ) -> str:
+        candidate_path = Path(filename)
+        stem = candidate_path.stem or candidate_path.name
+        suffix = candidate_path.suffix
+        candidate_name = candidate_path.name
+        suffix_index = 0
+
+        while True:
+            candidate_key = candidate_name.casefold()
+            if candidate_key not in reserved_names and not self._exists_in_either_destination(
+                candidate_name,
+                automation_path,
+                working_path,
+            ):
+                return candidate_name
+
+            suffix_index += 1
+            candidate_name = sanitize_processed_filename(
+                f"{stem}_{suffix_index}{suffix}"
+            )
+
+    @staticmethod
+    def _exists_in_either_destination(
+        filename: str,
+        automation_path: Path,
+        working_path: Path,
+    ) -> bool:
+        return (automation_path / filename).exists() or (working_path / filename).exists()
+
+    def _write_mirrored_file(
+        self,
+        content: bytes,
+        filename: str,
+        automation_path: Path,
+        working_path: Path,
+        written_paths: list[Path],
     ) -> None:
-        for destination in part_destinations:
-            for processed_file in processed_files:
-                automation_destination = destination.automation_path / processed_file.filename
-                working_destination = destination.working_path / processed_file.filename
+        automation_destination = automation_path / filename
+        working_destination = working_path / filename
 
-                if automation_destination.exists():
-                    raise DocumentIntakeError(
-                        "File already exists in automation destination: "
-                        f"{automation_destination}"
-                    )
+        self._copy_to_destination(content, automation_destination)
+        written_paths.append(automation_destination)
 
-                if working_destination.exists():
-                    raise DocumentIntakeError(
-                        f"File already exists in working destination: {working_destination}"
-                    )
+        self._copy_to_destination(content, working_destination)
+        written_paths.append(working_destination)
 
     @staticmethod
     def _is_zip_upload(filename: str) -> bool:
@@ -305,10 +309,18 @@ class DocumentIntakeService:
         )
 
     @staticmethod
+    def _should_ignore_zip_member(member_name: str) -> bool:
+        normalized_name = member_name.replace("\\", "/").strip("/")
+        if not normalized_name:
+            return True
+
+        parts = [part for part in normalized_name.split("/") if part]
+        return any(part == "__MACOSX" for part in parts)
+
+    @staticmethod
     def _flatten_zip_member_name(member_name: str) -> str:
-        normalized_name = member_name.replace("\\", "/")
-        flattened_name = normalized_name.rsplit("/", 1)[-1].strip()
-        return flattened_name
+        normalized_name = member_name.replace("\\", "/").strip("/")
+        return normalized_name.rsplit("/", 1)[-1].strip()
 
     @staticmethod
     def _copy_to_destination(content: bytes, destination: Path) -> None:
@@ -317,11 +329,19 @@ class DocumentIntakeService:
 
     @staticmethod
     def _ensure_directory(path: Path, created_dirs: list[Path]) -> None:
-        if path.exists():
-            return
+        paths_to_create: list[Path] = []
+        current_path = path
 
-        path.mkdir(parents=True, exist_ok=True)
-        created_dirs.append(path)
+        while not current_path.exists():
+            paths_to_create.append(current_path)
+            parent = current_path.parent
+            if parent == current_path:
+                break
+            current_path = parent
+
+        for directory in reversed(paths_to_create):
+            directory.mkdir(exist_ok=True)
+            created_dirs.append(directory)
 
     @staticmethod
     def _cleanup_written_files(written_paths: list[Path]) -> None:
@@ -339,6 +359,17 @@ class DocumentIntakeService:
                 path.rmdir()
             except OSError:
                 continue
+
+    @staticmethod
+    def _summarize_extensions(processed_filenames: list[str]) -> dict[str, int]:
+        counts_by_extension: dict[str, int] = {}
+
+        for filename in processed_filenames:
+            suffix = Path(filename).suffix.lower()
+            extension = suffix if suffix else "[no extension]"
+            counts_by_extension[extension] = counts_by_extension.get(extension, 0) + 1
+
+        return dict(sorted(counts_by_extension.items()))
 
 
 @dataclass(frozen=True)

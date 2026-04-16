@@ -4,7 +4,7 @@ import cgi
 import html
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
 from typing import Callable
@@ -42,7 +42,7 @@ BOM_UPLOAD_ALLOWED_SUFFIXES = (".xlsx", ".xls", ".zip")
 @dataclass(frozen=True)
 class ViewState:
     customer: str = ""
-    top_level_parts: list[str] = field(default_factory=lambda: [""])
+    part_number: str = ""
     message: str = ""
     error: str = ""
     result: DocumentIntakeResult | None = None
@@ -99,11 +99,11 @@ def create_app(
 
 def _handle_upload(environ, start_response, config, service: DocumentIntakeService):
     customer = ""
-    top_level_parts = [""]
+    part_number = ""
     try:
         form = _parse_form_request(environ)
         customer = form.getfirst("customer", "")
-        top_level_parts = form.getlist("top_level_parts") or [""]
+        part_number = form.getfirst("part_number", "")
         file_fields = form["documents"] if "documents" in form else []
         if not isinstance(file_fields, list):
             file_fields = [file_fields]
@@ -119,11 +119,10 @@ def _handle_upload(environ, start_response, config, service: DocumentIntakeServi
                 )
             )
 
-        result = service.intake_documents(customer, top_level_parts, uploaded_files)
+        result = service.intake_documents(customer, part_number, uploaded_files)
         message = (
-            f"Processed {len(result.processed_files)} file(s) into "
-            f"{len(result.part_destinations)} top-level part folder(s) for "
-            f"{result.customer_name}."
+            f"Processed {len(result.processed_files)} file(s) for "
+            f"{result.customer_name} / {result.part_number} into both configured roots."
         )
         return _respond_html(
             start_response,
@@ -131,7 +130,7 @@ def _handle_upload(environ, start_response, config, service: DocumentIntakeServi
                 config,
                 ViewState(
                     customer=result.customer_name,
-                    top_level_parts=result.top_level_parts,
+                    part_number=result.part_number,
                     message=message,
                     result=result,
                 ),
@@ -145,7 +144,7 @@ def _handle_upload(environ, start_response, config, service: DocumentIntakeServi
                 config,
                 ViewState(
                     customer=customer,
-                    top_level_parts=top_level_parts,
+                    part_number=part_number,
                     error=str(exc),
                 ),
             ),
@@ -159,7 +158,7 @@ def _handle_upload(environ, start_response, config, service: DocumentIntakeServi
                 config,
                 ViewState(
                     customer=customer,
-                    top_level_parts=top_level_parts,
+                    part_number=part_number,
                     error="Unexpected server error while processing the upload.",
                 ),
             ),
@@ -541,16 +540,9 @@ def _is_allowed_bom_upload(filename: str) -> bool:
 
 
 def _group_processed_files_by_extension(
-    processed_files,
+    extension_summary: dict[str, int],
 ) -> list[tuple[str, int]]:
-    counts_by_extension: dict[str, int] = {}
-
-    for processed_file in processed_files:
-        suffix = Path(processed_file.filename).suffix.lower()
-        extension = suffix if suffix else "No extension"
-        counts_by_extension[extension] = counts_by_extension.get(extension, 0) + 1
-
-    return sorted(counts_by_extension.items(), key=lambda item: (-item[1], item[0]))
+    return sorted(extension_summary.items(), key=lambda item: item[0])
 
 
 def render_page(config: AppConfig, view_state: ViewState) -> str:
@@ -569,11 +561,11 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
     elif view_state.result:
         result = view_state.result
         processed_files_by_extension = _group_processed_files_by_extension(
-            result.processed_files
+            result.extension_summary
         )
-        created_parts_html = "".join(
-            f"<li>{html.escape(destination.sanitized_part_folder_name)}</li>"
-            for destination in result.part_destinations
+        processed_files_html = "".join(
+            f"<li><code>{html.escape(filename)}</code></li>"
+            for filename in result.processed_files
         )
         processed_files_by_extension_html = "".join(
             "<li>"
@@ -589,21 +581,27 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             f"<p>{html.escape(view_state.message)}</p>"
             "<dl class=\"summary-grid\">"
             f"<div><dt>Customer</dt><dd>{html.escape(result.customer_name)}</dd></div>"
+            f"<div><dt>Part Number</dt><dd>{html.escape(result.part_number)}</dd></div>"
             f"<div><dt>Customer folder</dt><dd>{html.escape(result.sanitized_customer_folder_name)}</dd></div>"
-            f"<div><dt>Top-level parts</dt><dd>{len(result.part_destinations)}</dd></div>"
+            f"<div><dt>Part folder</dt><dd>{html.escape(result.sanitized_part_folder_name)}</dd></div>"
+            f"<div><dt>Uploaded files</dt><dd>{result.uploaded_files_count}</dd></div>"
             f"<div><dt>Processed files</dt><dd>{len(result.processed_files)}</dd></div>"
-            f"<div><dt>Automation path</dt><dd>{html.escape(str(result.automation_customer_path))}</dd></div>"
-            f"<div><dt>Working path</dt><dd>{html.escape(str(result.working_customer_path))}</dd></div>"
+            f"<div><dt>Automation destination</dt><dd>{html.escape(str(result.automation_path))}</dd></div>"
+            f"<div><dt>Working destination</dt><dd>{html.escape(str(result.working_path))}</dd></div>"
             "</dl>"
             "<div class=\"stack\">"
             "<div class=\"overview-card\">"
-            "<h4>Doc Package Overview</h4>"
-            "<p class=\"section-note\">Processed file counts grouped by extension.</p>"
+            "<h4>Processed Filenames</h4>"
+            "<p class=\"section-note\">Final flattened filenames written to both configured roots for this request.</p>"
+            "<ul class=\"count-list\">"
+            f"{processed_files_html}</ul>"
+            "</div>"
+            "<div class=\"overview-card\">"
+            "<h4>Extension Counts</h4>"
+            "<p class=\"section-note\">Processed file counts grouped by lowercase extension.</p>"
             "<ul class=\"count-list\">"
             f"{processed_files_by_extension_html}</ul>"
             "</div>"
-            "<div><h4>Part Folders Created</h4><ul>"
-            f"{created_parts_html}</ul></div>"
             "</div>"
             "</div>"
             "</section>"
@@ -923,6 +921,39 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
     <section class="panel">
       <div class="section-header">
         <div class="stack">
+          <h2>Document Intake Workflow</h2>
+          <p class="subtle">Upload customer package documents, flatten zip contents into processed outputs, and write the same processed document set to matching customer and part folders in both configured roots.</p>
+        </div>
+      </div>
+
+      <form method="post" enctype="multipart/form-data" novalidate>
+        <div class="form-grid">
+          <label for="customer">
+            Customer
+            <input id="customer" name="customer" type="text" required value="{html.escape(view_state.customer)}">
+          </label>
+          <label for="part_number">
+            Part Number
+            <input id="part_number" name="part_number" type="text" required value="{html.escape(view_state.part_number)}">
+          </label>
+          <label for="documents">
+            Documents
+            <input id="documents" name="documents" type="file" multiple required>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button type="submit">Process Documents</button>
+          <span class="status-line">Processing flattens zip contents and mirrors the processed outputs into both configured roots.</span>
+        </div>
+      </form>
+
+      {processed_document_overview_html}
+    </section>
+
+    <section class="panel">
+      <div class="section-header">
+        <div class="stack">
           <h2>BOM Intake Workflow</h2>
           <p class="subtle">Accepted uploads: `.xlsx`, `.xls`, `.zip`. Preview does not write to SQL. Process runs the create + standardized intake procedures.</p>
         </div>
@@ -1066,7 +1097,6 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
           </table>
         </div>
       </section>
-      {processed_document_overview_html}
     </section>
   </main>
   <script>
