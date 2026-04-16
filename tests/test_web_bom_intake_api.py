@@ -31,6 +31,56 @@ class FakeBomIntakeService:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
+    def preview_uploaded_bom(self, *, header_data, upload_data):
+        self.calls.append(
+            {
+                "header_data": header_data,
+                "upload_data": upload_data,
+                "mode": "preview",
+            }
+        )
+        return types.SimpleNamespace(
+            to_dict=lambda: {
+                "selectedFileName": "bom.xlsx",
+                "detectedWorksheet": "BOM",
+                "detectedSourceType": "spreadsheet_upload",
+                "sourceFilePath": None,
+                "rootCount": 1,
+                "rowCount": 2,
+                "standardizedRows": [
+                    {
+                        "source_row_number": 4,
+                        "original_value": "ABC-1000",
+                        "parent_part": None,
+                        "part_number": "ABC-1000",
+                        "indented_part_number": "ABC-1000",
+                        "bom_level": 0,
+                        "description": "TOP",
+                        "revision": "1",
+                        "quantity": 1,
+                        "uom": "EA",
+                        "item_number": "10",
+                        "make_buy": "MAKE",
+                        "mfr": None,
+                        "mfr_number": None,
+                        "lead_time_days": None,
+                        "cost": None,
+                        "validation_message": None,
+                    }
+                ],
+                "createProcParams": {"CustomerName": "ACME"},
+                "processProcParams": {"BomIntakeId": None, "DetectedBy": "estimator"},
+                "rootsTvpRows": [{"RootClientId": "R1"}],
+                "bomRowsTvpRows": [{"RootClientId": "R1", "RowSequence": 1}],
+                "createProc": {"params": {"CustomerName": "ACME"}},
+                "processStandardizedProc": {
+                    "params": {"BomIntakeId": None, "DetectedBy": "estimator"},
+                    "roots": [{"RootClientId": "R1"}],
+                    "rows": [{"RootClientId": "R1", "RowSequence": 1}],
+                },
+            }
+        )
+
     def process_standardized_upload(self, header_data, standardized_rows_data, *, dry_run=False):
         self.calls.append(
             {
@@ -248,6 +298,93 @@ class WebBomIntakeApiTests(unittest.TestCase):
         self.assertTrue(payload["dryRun"])
         self.assertIn("upload_data", fake_service.calls[0])
 
+    def test_multipart_preview_endpoint_returns_rich_preview(self) -> None:
+        fake_service = FakeBomIntakeService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                bom_intake_service_override=fake_service,
+            )
+
+            status, headers, body = _invoke_multipart(
+                app,
+                "/api/dev/bom-intake/preview",
+                fields={
+                    "customer_name": "ACME",
+                    "uploaded_by": "estimator",
+                    "quote_number": "Q-100",
+                    "intake_notes": "preview this",
+                },
+                file_field_name="bom_file",
+                filename="bom.xlsx",
+                content=b"fake workbook bytes",
+            )
+
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        payload = json.loads(body)
+        self.assertEqual(payload["selectedFileName"], "bom.xlsx")
+        self.assertEqual(payload["detectedWorksheet"], "BOM")
+        self.assertEqual(payload["rootCount"], 1)
+        self.assertEqual(fake_service.calls[0]["mode"], "preview")
+        self.assertEqual(fake_service.calls[0]["upload_data"]["filename"], "bom.xlsx")
+        self.assertEqual(fake_service.calls[0]["upload_data"]["content"], b"fake workbook bytes")
+
+    def test_multipart_process_endpoint_returns_summary(self) -> None:
+        fake_service = FakeBomIntakeService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                bom_intake_service_override=fake_service,
+            )
+
+            status, _headers, body = _invoke_multipart(
+                app,
+                "/api/dev/bom-intake/process",
+                fields={
+                    "customer_name": "ACME",
+                    "uploaded_by": "estimator",
+                },
+                file_field_name="bom_file",
+                filename="bom.zip",
+                content=b"zip bytes",
+            )
+
+        self.assertEqual(status, "200 OK")
+        payload = json.loads(body)
+        self.assertEqual(payload["summary"]["bomIntakeId"], 654)
+        self.assertIn("upload_data", fake_service.calls[0])
+
+    def test_root_page_renders_bom_upload_ui(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                bom_intake_service_override=FakeBomIntakeService(),
+            )
+
+            status, headers, body = _invoke_get(app, "/")
+
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
+        self.assertIn("BOM Upload And Intake", body)
+        self.assertIn('id="preview-button"', body)
+        self.assertIn("/api/dev/bom-intake/preview", body)
+
 
 def _invoke_json(app, path: str, payload: dict[str, object]):
     raw_body = json.dumps(payload).encode("utf-8")
@@ -265,6 +402,84 @@ def _invoke_json(app, path: str, payload: dict[str, object]):
                 "CONTENT_LENGTH": str(len(raw_body)),
                 "CONTENT_TYPE": "application/json",
                 "wsgi.input": io.BytesIO(raw_body),
+            },
+            start_response,
+        )
+    )
+    return captured["status"], captured["headers"], body.decode("utf-8")
+
+
+def _invoke_multipart(
+    app,
+    path: str,
+    *,
+    fields: dict[str, str],
+    file_field_name: str,
+    filename: str,
+    content: bytes,
+):
+    boundary = "----WebKitFormBoundaryTest123456"
+    chunks: list[bytes] = []
+
+    for name, value in fields.items():
+        chunks.extend(
+            [
+                f"--{boundary}\r\n".encode("utf-8"),
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"),
+                value.encode("utf-8"),
+                b"\r\n",
+            ]
+        )
+
+    chunks.extend(
+        [
+            f"--{boundary}\r\n".encode("utf-8"),
+            (
+                f'Content-Disposition: form-data; name="{file_field_name}"; '
+                f'filename="{filename}"\r\n'
+            ).encode("utf-8"),
+            b"Content-Type: application/octet-stream\r\n\r\n",
+            content,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode("utf-8"),
+        ]
+    )
+    raw_body = b"".join(chunks)
+    captured: dict[str, object] = {}
+
+    def start_response(status, headers):
+        captured["status"] = status
+        captured["headers"] = dict(headers)
+
+    body = b"".join(
+        app(
+            {
+                "REQUEST_METHOD": "POST",
+                "PATH_INFO": path,
+                "CONTENT_LENGTH": str(len(raw_body)),
+                "CONTENT_TYPE": f"multipart/form-data; boundary={boundary}",
+                "wsgi.input": io.BytesIO(raw_body),
+            },
+            start_response,
+        )
+    )
+    return captured["status"], captured["headers"], body.decode("utf-8")
+
+
+def _invoke_get(app, path: str):
+    captured: dict[str, object] = {}
+
+    def start_response(status, headers):
+        captured["status"] = status
+        captured["headers"] = dict(headers)
+
+    body = b"".join(
+        app(
+            {
+                "REQUEST_METHOD": "GET",
+                "PATH_INFO": path,
+                "CONTENT_LENGTH": "0",
+                "wsgi.input": io.BytesIO(b""),
             },
             start_response,
         )

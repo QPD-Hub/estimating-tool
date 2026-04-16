@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from src.services.bom_payload_builder import (
@@ -66,6 +67,7 @@ UPLOAD_REQUEST_FIELDS = {
     "source_file_path",
     "filename",
     "content_base64",
+    "content",
 }
 
 
@@ -75,6 +77,57 @@ class BomIntakeServiceError(ValueError):
 
 class BomIntakeRequestError(BomIntakeServiceError):
     pass
+
+
+@dataclass(frozen=True)
+class BomIntakePreview:
+    selected_file_name: str
+    detected_worksheet: str
+    detected_source_type: str
+    source_file_path: str | None
+    root_count: int
+    row_count: int
+    standardized_rows: list[StandardizedBomRow]
+    payload: BomIntakePayload
+
+    def to_dict(self) -> dict[str, object]:
+        preview_payload = self.payload.to_preview_dict()
+        return {
+            "selectedFileName": self.selected_file_name,
+            "detectedWorksheet": self.detected_worksheet,
+            "detectedSourceType": self.detected_source_type,
+            "sourceFilePath": self.source_file_path,
+            "rootCount": self.root_count,
+            "rowCount": self.row_count,
+            "standardizedRows": [
+                {
+                    "source_row_number": row["source_row_number"],
+                    "original_value": row["original_value"],
+                    "parent_part": row["parent_part"],
+                    "part_number": row["part_number"],
+                    "indented_part_number": row["indented_part_number"],
+                    "bom_level": row["bom_level"],
+                    "description": row["description"],
+                    "revision": row["revision"],
+                    "quantity": row["quantity"],
+                    "uom": row["uom"],
+                    "item_number": row["item_number"],
+                    "make_buy": row["make_buy"],
+                    "mfr": row["mfr"],
+                    "mfr_number": row["mfr_number"],
+                    "lead_time_days": row["lead_time_days"],
+                    "cost": row["cost"],
+                    "validation_message": row["validation_message"],
+                }
+                for row in (asdict(standardized_row) for standardized_row in self.standardized_rows)
+            ],
+            "createProc": preview_payload["createProc"],
+            "processStandardizedProc": preview_payload["processStandardizedProc"],
+            "createProcParams": preview_payload["createProc"]["params"],
+            "processProcParams": preview_payload["processStandardizedProc"]["params"],
+            "rootsTvpRows": preview_payload["processStandardizedProc"]["roots"],
+            "bomRowsTvpRows": preview_payload["processStandardizedProc"]["rows"],
+        }
 
 
 class BomIntakeService:
@@ -133,18 +186,19 @@ class BomIntakeService:
         dry_run: bool = False,
         preview_path: Path = DEFAULT_PREVIEW_PATH,
     ) -> dict[str, object]:
-        payload = self.build_uploaded_payload(
+        preview = self.preview_uploaded_bom(
             header_data=header_data,
             upload_data=upload_data,
         )
+        payload = preview.payload
 
         if dry_run:
-            preview = payload.to_preview_dict()
-            self._write_preview_json(preview_path, preview)
+            preview_payload = payload.to_preview_dict()
+            self._write_preview_json(preview_path, preview_payload)
             return {
                 "DryRun": True,
                 "PreviewPath": str(preview_path),
-                "Payload": preview,
+                "Payload": preview_payload,
             }
 
         logger.info(
@@ -154,6 +208,65 @@ class BomIntakeService:
             len(payload.rows),
         )
         return self._db_service.create_and_process_intake(payload=payload)
+
+    def preview_uploaded_bom(
+        self,
+        *,
+        header_data: Mapping[str, object],
+        upload_data: Mapping[str, object],
+    ) -> BomIntakePreview:
+        if not isinstance(header_data, Mapping):
+            raise BomIntakeRequestError("Request field 'header' must be an object.")
+        if not isinstance(upload_data, Mapping):
+            raise BomIntakeRequestError("Request field 'upload' must be an object.")
+
+        metadata = self._build_metadata_for_upload(header_data, upload_data)
+        upload_file = self._build_upload_file(upload_data)
+
+        try:
+            located = self._package_locator.locate(
+                filename=upload_file["filename"],
+                content=upload_file["content"],
+                source_file_path=upload_file["source_file_path"],
+            )
+            parsed = self._spreadsheet_parser.parse(
+                filename=located.filename,
+                content=located.content,
+            )
+            standardized = self._standardizer.standardize(parsed)
+            payload = self._payload_builder.build(
+                metadata=BomPayloadBuildInput(
+                    customer_name=metadata.customer_name,
+                    uploaded_by=metadata.uploaded_by,
+                    quote_number=metadata.quote_number,
+                    source_file_name=metadata.source_file_name or located.filename,
+                    source_file_path=metadata.source_file_path
+                    or located.source_file_path,
+                    source_sheet_name=metadata.source_sheet_name or parsed.sheet_name,
+                    source_type=metadata.source_type or located.source_type,
+                    parser_version=metadata.parser_version or DEFAULT_PARSER_VERSION,
+                    intake_notes=metadata.intake_notes,
+                ),
+                standardized_rows=standardized.rows,
+            )
+        except (
+            BomPackageLocatorError,
+            BomSpreadsheetParserError,
+            BomStandardizerError,
+            BomIntakePayloadError,
+        ) as exc:
+            raise BomIntakeRequestError(str(exc)) from exc
+
+        return BomIntakePreview(
+            selected_file_name=located.filename,
+            detected_worksheet=parsed.sheet_name,
+            detected_source_type=located.source_type,
+            source_file_path=located.source_file_path,
+            root_count=len(payload.roots),
+            row_count=len(payload.rows),
+            standardized_rows=standardized.rows,
+            payload=payload,
+        )
 
     def build_standardized_payload(
         self,
@@ -192,49 +305,10 @@ class BomIntakeService:
         header_data: Mapping[str, object],
         upload_data: Mapping[str, object],
     ) -> BomIntakePayload:
-        if not isinstance(header_data, Mapping):
-            raise BomIntakeRequestError("Request field 'header' must be an object.")
-        if not isinstance(upload_data, Mapping):
-            raise BomIntakeRequestError("Request field 'upload' must be an object.")
-
-        metadata = self._build_metadata_for_upload(header_data, upload_data)
-        upload_file = self._build_upload_file(upload_data)
-
-        try:
-            located = self._package_locator.locate(
-                filename=upload_file["filename"],
-                content=upload_file["content"],
-                source_file_path=upload_file["source_file_path"],
-            )
-            parsed = self._spreadsheet_parser.parse(
-                filename=located.filename,
-                content=located.content,
-            )
-            standardized = self._standardizer.standardize(parsed)
-            return self._payload_builder.build(
-                metadata=BomPayloadBuildInput(
-                    customer_name=metadata.customer_name,
-                    uploaded_by=metadata.uploaded_by,
-                    quote_number=metadata.quote_number,
-                    source_file_name=metadata.source_file_name
-                    or located.filename,
-                    source_file_path=metadata.source_file_path
-                    or located.source_file_path,
-                    source_sheet_name=metadata.source_sheet_name
-                    or parsed.sheet_name,
-                    source_type=metadata.source_type or located.source_type,
-                    parser_version=metadata.parser_version or DEFAULT_PARSER_VERSION,
-                    intake_notes=metadata.intake_notes,
-                ),
-                standardized_rows=standardized.rows,
-            )
-        except (
-            BomPackageLocatorError,
-            BomSpreadsheetParserError,
-            BomStandardizerError,
-            BomIntakePayloadError,
-        ) as exc:
-            raise BomIntakeRequestError(str(exc)) from exc
+        return self.preview_uploaded_bom(
+            header_data=header_data,
+            upload_data=upload_data,
+        ).payload
 
     def _build_metadata(self, header_data: Mapping[str, object]) -> BomIntakeMetadata:
         _reject_extra_fields(header_data, HEADER_REQUEST_FIELDS, "header")
@@ -355,14 +429,25 @@ class BomIntakeService:
         source_file_path = _optional_string(upload_data, "source_file_path")
         filename = _optional_string(upload_data, "filename")
         content_base64 = _optional_string(upload_data, "content_base64")
+        content = upload_data.get("content")
 
-        if source_file_path and content_base64:
-            raise BomIntakeRequestError(
-                "upload must provide either source_file_path or content_base64, not both."
+        provided_sources = [
+            source_name
+            for source_name, value in (
+                ("source_file_path", source_file_path),
+                ("content_base64", content_base64),
+                ("content", content),
             )
-        if not source_file_path and not content_base64:
+            if value is not None
+        ]
+
+        if len(provided_sources) > 1:
             raise BomIntakeRequestError(
-                "upload must include source_file_path or content_base64."
+                "upload must provide exactly one of source_file_path, content_base64, or content."
+            )
+        if not provided_sources:
+            raise BomIntakeRequestError(
+                "upload must include source_file_path, content_base64, or content."
             )
 
         if source_file_path:
@@ -375,6 +460,19 @@ class BomIntakeService:
                 "filename": filename or source_path.name,
                 "content": source_path.read_bytes(),
                 "source_file_path": str(source_path),
+            }
+
+        if content is not None:
+            if not isinstance(content, bytes):
+                raise BomIntakeRequestError("upload.content must be raw bytes.")
+            if filename is None:
+                raise BomIntakeRequestError(
+                    "upload.filename is required when using content."
+                )
+            return {
+                "filename": filename,
+                "content": content,
+                "source_file_path": source_file_path,
             }
 
         if filename is None:

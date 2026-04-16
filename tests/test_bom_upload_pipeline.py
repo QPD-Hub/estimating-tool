@@ -208,6 +208,34 @@ class BomUploadPipelineTests(unittest.TestCase):
         self.assertEqual(preview["processStandardizedProc"]["params"]["BomIntakeId"], None)
         self.assertEqual(db_service.calls, [])
 
+    def test_service_preview_builds_from_raw_upload_bytes(self) -> None:
+        db_service = FakeDbService()
+        service = BomIntakeService(db_service=db_service)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workbook_path = _materialize_fixture_workbook(
+                "single_root_workbook.json",
+                Path(temp_dir),
+            )
+            preview = service.preview_uploaded_bom(
+                header_data={
+                    "customer_name": "ACME",
+                    "uploaded_by": "estimator",
+                    "source_file_name": workbook_path.name,
+                },
+                upload_data={
+                    "filename": workbook_path.name,
+                    "content": workbook_path.read_bytes(),
+                },
+            )
+
+        self.assertEqual(preview.selected_file_name, workbook_path.name)
+        self.assertEqual(preview.detected_worksheet, "BOM")
+        self.assertEqual(preview.detected_source_type, "spreadsheet_upload")
+        self.assertEqual(preview.root_count, 1)
+        self.assertEqual(preview.row_count, 3)
+        self.assertEqual(db_service.calls, [])
+
 
 def _materialize_fixture_workbook(fixture_name: str, target_dir: Path) -> Path:
     fixture = json.loads((FIXTURE_ROOT / fixture_name).read_text(encoding="utf-8"))
