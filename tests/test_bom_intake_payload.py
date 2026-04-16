@@ -7,6 +7,9 @@ from src.contracts.bom_intake import (
     PROCESS_PROC_SCALAR_FIELDS,
     ROOT_TVP_FIELDS,
     ROW_TVP_FIELDS,
+    BomIntakeContractError,
+    BomIntakeRow,
+    ProcessStandardizedBomIntakeInput,
 )
 from src.services.bom_intake_payload import (
     BomIntakeMetadata,
@@ -38,6 +41,7 @@ DB_OWNED_FIELDS = {
     "DecisionStatus",
     "DecisionReason",
     "ExistingBomRootId",
+    "InternalDuplicateRank",
 }
 
 
@@ -132,6 +136,48 @@ class BuildBomIntakePayloadTests(unittest.TestCase):
             preview_keys.update(row)
 
         self.assertTrue(DB_OWNED_FIELDS.isdisjoint(preview_keys))
+        self.assertNotIn(
+            "IsLevel0",
+            preview["processStandardizedProc"]["rows"][0],
+        )
+
+    def test_contract_models_reject_extra_sql_bound_fields(self) -> None:
+        with self.assertRaises(BomIntakeContractError):
+            ProcessStandardizedBomIntakeInput.from_dict(
+                {
+                    "BomIntakeId": 123,
+                    "DetectedBy": "estimator",
+                    "Unexpected": "value",
+                },
+                context="Process params",
+            )
+
+        with self.assertRaises(BomIntakeContractError):
+            BomIntakeRow.from_dict(
+                {
+                    "RootClientId": "R1",
+                    "RowSequence": 1,
+                    "SourceRowNumber": 1,
+                    "OriginalValue": None,
+                    "ParentPart": None,
+                    "PartNumber": "ABC-1000",
+                    "IndentedPartNumber": "ABC-1000",
+                    "BomLevel": 0,
+                    "Description": "TOP",
+                    "Revision": "1",
+                    "Quantity": 1,
+                    "UOM": "EA",
+                    "ItemNumber": "10",
+                    "MakeBuy": "MAKE",
+                    "MFR": None,
+                    "MFRNumber": None,
+                    "LeadTimeDays": None,
+                    "Cost": None,
+                    "ValidationMessage": None,
+                    "IsLevel0": True,
+                },
+                context="Row payload",
+            )
 
     def test_rejects_rows_before_first_root(self) -> None:
         with self.assertRaises(BomIntakePayloadError):

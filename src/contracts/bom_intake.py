@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import MISSING, asdict, dataclass, fields
-from typing import ClassVar
+from typing import Any, ClassVar, TypeVar
 
 
 CREATE_PROC_SCALAR_FIELDS = (
@@ -59,6 +59,33 @@ ROW_TVP_FIELDS = (
     "ValidationMessage",
 )
 
+DB_OWNED_FIELDS = (
+    "IsLevel0",
+    "BomRootId",
+    "ExistingBomRootId",
+    "RowGuid",
+    "ParentBomRowId",
+    "RowPath",
+    "RowStatus",
+    "CreatedAt",
+    "ModifiedAt",
+    "NormalizedCustomerName",
+    "NormalizedPartNumber",
+    "NormalizedRevision",
+    "DecisionStatus",
+    "DecisionReason",
+    "InternalDuplicateRank",
+)
+
+SQL_BOUND_FORBIDDEN_FIELDS = frozenset(
+    {
+        *DB_OWNED_FIELDS,
+        "BomIntakeId",
+    }
+)
+
+TStrictContractModel = TypeVar("TStrictContractModel", bound="_StrictContractModel")
+
 
 class BomIntakeContractError(ValueError):
     pass
@@ -76,7 +103,12 @@ class _StrictContractModel:
         return tuple(field.name for field in fields(cls))
 
     @classmethod
-    def from_dict(cls, payload: dict[str, object], *, context: str) -> "_StrictContractModel":
+    def from_dict(
+        cls: type[TStrictContractModel],
+        payload: dict[str, object],
+        *,
+        context: str,
+    ) -> TStrictContractModel:
         if not isinstance(payload, dict):
             raise BomIntakeContractError(f"{context} must be an object.")
 
@@ -159,3 +191,39 @@ class BomIntakeRow(_StrictContractModel):
     LeadTimeDays: int | float | None = None
     Cost: int | float | None = None
     ValidationMessage: str | None = None
+
+
+@dataclass(frozen=True)
+class ProcessStandardizedBomIntakePayload:
+    params: ProcessStandardizedBomIntakeInput
+    roots: list[BomIntakeRootRow]
+    rows: list[BomIntakeRow]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "params": self.params.to_dict(),
+            "roots": [root.to_dict() for root in self.roots],
+            "rows": [row.to_dict() for row in self.rows],
+        }
+
+
+def validate_sql_bound_row_dict(
+    payload: dict[str, object],
+    *,
+    field_names: tuple[str, ...],
+    context: str,
+) -> dict[str, object]:
+    forbidden = sorted(set(payload) & SQL_BOUND_FORBIDDEN_FIELDS - set(field_names))
+    if forbidden:
+        raise BomIntakeContractError(
+            f"{context} contains SQL-owned fields: {', '.join(forbidden)}."
+        )
+
+    payload_keys = tuple(payload.keys())
+    if payload_keys != field_names:
+        raise BomIntakeContractError(
+            f"{context} fields do not match the SQL contract. "
+            f"Expected {list(field_names)}, got {list(payload_keys)}."
+        )
+
+    return payload

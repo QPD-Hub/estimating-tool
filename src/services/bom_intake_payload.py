@@ -6,6 +6,7 @@ from src.contracts.bom_intake import (
     BomIntakeRootRow,
     BomIntakeRow,
     CreateBomIntakeInput,
+    ProcessStandardizedBomIntakePayload,
     ProcessStandardizedBomIntakeInput,
 )
 
@@ -189,7 +190,42 @@ class BomIntakePayload:
             DetectedBy=self.detected_by,
         )
 
+    def process_payload(
+        self,
+        bom_intake_id: int | None,
+    ) -> ProcessStandardizedBomIntakePayload:
+        if bom_intake_id is None:
+            params = ProcessStandardizedBomIntakeInput(
+                BomIntakeId=0,
+                DetectedBy=self.detected_by,
+            ).to_dict()
+            params["BomIntakeId"] = None
+        else:
+            params = self.process_input(bom_intake_id).to_dict()
+
+        return ProcessStandardizedBomIntakePayload(
+            params=ProcessStandardizedBomIntakeInput.from_dict(
+                params,
+                context="Process standardized procedure params",
+            ),
+            roots=[
+                BomIntakeRootRow.from_dict(
+                    root.to_dict(),
+                    context=f"Process standardized roots[{index}]",
+                )
+                for index, root in enumerate(self.roots)
+            ],
+            rows=[
+                BomIntakeRow.from_dict(
+                    row.to_dict(),
+                    context=f"Process standardized rows[{index}]",
+                )
+                for index, row in enumerate(self.rows)
+            ],
+        )
+
     def to_preview_dict(self) -> dict[str, object]:
+        process_payload = self.process_payload(None).to_dict()
         return {
             "createProc": {
                 "procedure": "dbo.usp_BOM_Intake_Create",
@@ -197,12 +233,7 @@ class BomIntakePayload:
             },
             "processStandardizedProc": {
                 "procedure": "dbo.usp_BOM_Intake_ProcessStandardized",
-                "params": {
-                    "BomIntakeId": None,
-                    "DetectedBy": self.detected_by,
-                },
-                "roots": [root.to_dict() for root in self.roots],
-                "rows": [row.to_dict() for row in self.rows],
+                **process_payload,
             },
         }
 

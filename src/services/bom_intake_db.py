@@ -10,6 +10,7 @@ from src.contracts.bom_intake import (
     PROCESS_PROC_SCALAR_FIELDS,
     ROOT_TVP_FIELDS,
     ROW_TVP_FIELDS,
+    validate_sql_bound_row_dict,
 )
 from src.services.bom_intake_payload import BomIntakePayload
 
@@ -58,9 +59,6 @@ class BomIntakeDbService:
             raise BomIntakeDbError("DetectedBy is required for BOM intake processing.")
 
         header = payload.create_input.to_dict()
-        root_candidates = [root.to_dict() for root in payload.roots]
-        bom_rows = [row.to_dict() for row in payload.rows]
-        detected_by = payload.detected_by
 
         connection_kwargs = self.build_connection_kwargs()
         logger.info(
@@ -84,12 +82,10 @@ class BomIntakeDbService:
         cursor = connection.cursor()
         try:
             bom_intake_id = self._create_intake(cursor, header)
+            process_payload = payload.process_payload(bom_intake_id).to_dict()
             result = self._process_standardized_payload(
                 cursor=cursor,
-                bom_intake_id=bom_intake_id,
-                detected_by=detected_by,
-                root_candidates=root_candidates,
-                bom_rows=bom_rows,
+                process_payload=process_payload,
             )
             connection.commit()
             return result
@@ -149,21 +145,20 @@ SELECT @BomIntakeId AS BomIntakeId;
         self,
         *,
         cursor: Any,
-        bom_intake_id: int,
-        detected_by: str,
-        root_candidates: list[dict[str, object]],
-        bom_rows: list[dict[str, object]],
+        process_payload: dict[str, object],
     ) -> dict[str, object]:
+        process_params = process_payload["params"]
+        root_candidates = process_payload["roots"]
+        bom_rows = process_payload["rows"]
         sql, params = self._build_process_standardized_command(
-            bom_intake_id=bom_intake_id,
-            detected_by=detected_by,
+            process_params=process_params,
             root_candidates=root_candidates,
             bom_rows=bom_rows,
         )
 
         logger.info(
             "Starting BOM intake process call for BomIntakeId=%s with %s roots and %s rows.",
-            bom_intake_id,
+            process_params["BomIntakeId"],
             len(root_candidates),
             len(bom_rows),
         )
@@ -174,7 +169,7 @@ SELECT @BomIntakeId AS BomIntakeId;
         except Exception as exc:
             logger.exception(
                 "BOM intake process call failed for BomIntakeId=%s.",
-                bom_intake_id,
+                process_params["BomIntakeId"],
             )
             raise BomIntakeDbProcedureError(
                 "dbo.usp_BOM_Intake_ProcessStandardized failed."
@@ -186,6 +181,7 @@ SELECT @BomIntakeId AS BomIntakeId;
                 "dbo.usp_BOM_Intake_ProcessStandardized did not return a summary result set."
             )
 
+        bom_intake_id = process_params["BomIntakeId"]
         summary.setdefault("BomIntakeId", bom_intake_id)
         summary.setdefault("DetectedRootCount", len(root_candidates))
         summary.setdefault(
@@ -221,8 +217,7 @@ SELECT @BomIntakeId AS BomIntakeId;
     def _build_process_standardized_command(
         self,
         *,
-        bom_intake_id: int,
-        detected_by: str,
+        process_params: dict[str, object],
         root_candidates: Sequence[dict[str, object]],
         bom_rows: Sequence[dict[str, object]],
     ) -> tuple[str, tuple[object, ...]]:
@@ -252,18 +247,15 @@ EXEC dbo.usp_BOM_Intake_ProcessStandardized
     @Rows = @Rows;
 """
 
-        process_input = {
-            key: value
-            for key, value in zip(
-                PROCESS_PROC_SCALAR_FIELDS,
-                (bom_intake_id, detected_by),
-                strict=True,
-            )
-        }
+        _validate_sql_payload_shape(
+            payload=process_params,
+            expected_columns=PROCESS_PROC_SCALAR_FIELDS,
+            context="Process procedure params",
+        )
         return sql, tuple(
             root_params
             + row_params
-            + [process_input["BomIntakeId"], process_input["DetectedBy"]]
+            + [process_params["BomIntakeId"], process_params["DetectedBy"]]
         )
 
 
@@ -350,12 +342,14 @@ def _validate_sql_payload_shape(
     expected_columns: Sequence[str],
     context: str,
 ) -> None:
-    payload_columns = tuple(payload.keys())
-    if payload_columns != tuple(expected_columns):
-        raise BomIntakeDbError(
-            f"{context} fields do not match the SQL contract. "
-            f"Expected {list(expected_columns)}, got {list(payload_columns)}."
+    try:
+        validate_sql_bound_row_dict(
+            payload,
+            field_names=tuple(expected_columns),
+            context=context,
         )
+    except ValueError as exc:
+        raise BomIntakeDbError(str(exc)) from exc
 
 
 def _extract_process_results(

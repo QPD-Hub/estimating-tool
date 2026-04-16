@@ -228,6 +228,61 @@ class BomIntakeDbServiceTests(unittest.TestCase):
                 {"CustomerName": "ACME", "Unexpected": "value"},
             )
 
+    def test_rejects_sql_owned_fields_in_row_payload(self) -> None:
+        with self.assertRaises(BomIntakeDbError):
+            service = BomIntakeDbService(
+                sql_config=SqlServerConfig(
+                    host="sql-host",
+                    username="app_user",
+                    password="secret",
+                ),
+                connect=lambda **_kwargs: None,
+            )
+            service._build_process_standardized_command(
+                process_params={"BomIntakeId": 321, "DetectedBy": "estimator"},
+                root_candidates=[
+                    {
+                        "RootClientId": "R1",
+                        "RootSequence": 1,
+                        "SourceRowNumber": 1,
+                        "CustomerName": "ACME",
+                        "Level0PartNumber": "ABC-1000",
+                        "Revision": "1",
+                        "RootDescription": "TOP",
+                        "RootItemNumber": "10",
+                        "RootQuantity": 1,
+                        "RootUOM": "EA",
+                        "RootMakeBuy": "MAKE",
+                        "RootMFR": None,
+                        "RootMFRNumber": None,
+                    }
+                ],
+                bom_rows=[
+                    {
+                        "RootClientId": "R1",
+                        "RowSequence": 1,
+                        "SourceRowNumber": 1,
+                        "OriginalValue": None,
+                        "ParentPart": None,
+                        "PartNumber": "ABC-1000",
+                        "IndentedPartNumber": "ABC-1000",
+                        "BomLevel": 0,
+                        "Description": "TOP",
+                        "Revision": "1",
+                        "Quantity": 1,
+                        "UOM": "EA",
+                        "ItemNumber": "10",
+                        "MakeBuy": "MAKE",
+                        "MFR": None,
+                        "MFRNumber": None,
+                        "LeadTimeDays": None,
+                        "Cost": None,
+                        "ValidationMessage": None,
+                        "IsLevel0": True,
+                    }
+                ],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

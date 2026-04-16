@@ -135,6 +135,13 @@ class BomIntakeServiceTests(unittest.TestCase):
         self.assertEqual(result["PreviewPath"], str(preview_path))
         self.assertEqual(written_payload, result["Payload"])
         self.assertEqual(db_service.calls, [])
+        self.assertEqual(
+            tuple(written_payload["processStandardizedProc"]["params"].keys()),
+            ("BomIntakeId", "DetectedBy"),
+        )
+        self.assertIsNone(
+            written_payload["processStandardizedProc"]["params"]["BomIntakeId"]
+        )
 
 
 if __name__ == "__main__":

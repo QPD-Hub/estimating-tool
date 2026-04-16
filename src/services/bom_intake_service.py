@@ -77,7 +77,7 @@ class BomIntakeService:
         )
 
         if dry_run:
-            # Dry-run previews the exact contract-bound JSON the app would send to SQL.
+            # Dry-run previews the exact SQL-bound payload the app would send to SQL Server.
             preview = payload.to_preview_dict()
             self._write_preview_json(preview_path, preview)
             return {

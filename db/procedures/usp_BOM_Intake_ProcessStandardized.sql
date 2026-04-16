@@ -202,46 +202,71 @@ BEGIN
             BomRootId    BIGINT NOT NULL
         );
 
-        INSERT INTO dbo.BOM_Root
+        MERGE dbo.BOM_Root AS target
+        USING
         (
-            BomIntakeId,
-            CustomerName,
-            Level0PartNumber,
-            Revision,
-            NormalizedCustomerName,
-            NormalizedPartNumber,
-            NormalizedRevision,
-            RootDescription,
-            RootItemNumber,
-            RootQuantity,
-            RootUOM,
-            RootMakeBuy,
-            RootMFR,
-            RootMFRNumber,
-            RootStatus
-        )
+            SELECT
+                src.RootClientId,
+                @BomIntakeId AS BomIntakeId,
+                src.NormalizedCustomerName AS CustomerName,
+                src.NormalizedPartNumber AS Level0PartNumber,
+                src.NormalizedRevision AS Revision,
+                src.NormalizedCustomerName,
+                src.NormalizedPartNumber,
+                src.NormalizedRevision,
+                src.RootDescription,
+                src.RootItemNumber,
+                src.RootQuantity,
+                src.RootUOM,
+                src.RootMakeBuy,
+                src.RootMFR,
+                src.RootMFRNumber,
+                CAST('raw' AS NVARCHAR(30)) AS RootStatus
+            FROM #StageRoots src
+            WHERE src.DecisionStatus = 'accepted'
+        ) AS src
+            ON 1 = 0
+        WHEN NOT MATCHED THEN
+            INSERT
+            (
+                BomIntakeId,
+                CustomerName,
+                Level0PartNumber,
+                Revision,
+                NormalizedCustomerName,
+                NormalizedPartNumber,
+                NormalizedRevision,
+                RootDescription,
+                RootItemNumber,
+                RootQuantity,
+                RootUOM,
+                RootMakeBuy,
+                RootMFR,
+                RootMFRNumber,
+                RootStatus
+            )
+            VALUES
+            (
+                src.BomIntakeId,
+                src.CustomerName,
+                src.Level0PartNumber,
+                src.Revision,
+                src.NormalizedCustomerName,
+                src.NormalizedPartNumber,
+                src.NormalizedRevision,
+                src.RootDescription,
+                src.RootItemNumber,
+                src.RootQuantity,
+                src.RootUOM,
+                src.RootMakeBuy,
+                src.RootMFR,
+                src.RootMFRNumber,
+                src.RootStatus
+            )
         OUTPUT
             src.RootClientId,
             inserted.BomRootId
-        INTO #AcceptedRootMap (RootClientId, BomRootId)
-        SELECT
-            @BomIntakeId,
-            src.NormalizedCustomerName,
-            src.NormalizedPartNumber,
-            src.NormalizedRevision,
-            src.NormalizedCustomerName,
-            src.NormalizedPartNumber,
-            src.NormalizedRevision,
-            src.RootDescription,
-            src.RootItemNumber,
-            src.RootQuantity,
-            src.RootUOM,
-            src.RootMakeBuy,
-            src.RootMFR,
-            src.RootMFRNumber,
-            'raw'
-        FROM #StageRoots src
-        WHERE src.DecisionStatus = 'accepted';
+        INTO #AcceptedRootMap (RootClientId, BomRootId);
 
         INSERT INTO dbo.BOM_Intake_Root_Result
         (
