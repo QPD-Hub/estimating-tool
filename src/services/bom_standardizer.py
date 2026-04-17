@@ -32,11 +32,7 @@ class BomStandardizer:
             indented_part_number = _coerce_optional_text(
                 values.get("indented_part_number")
             ) or part_number
-            description = _coerce_required_text(
-                values.get("description"),
-                "description",
-                parsed_row.source_row_number,
-            )
+            description = _coerce_optional_text(values.get("description"))
             explicit_parent = _coerce_optional_text(values.get("parent_part"))
             parent_part = explicit_parent
             if parent_part is None and bom_level > 0:

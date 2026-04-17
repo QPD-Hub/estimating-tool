@@ -8,7 +8,7 @@ from src.contracts.bom_intake import ROOT_TVP_FIELDS, ROW_TVP_FIELDS
 from src.services.bom_intake_service import BomIntakeRequestError, BomIntakeService
 from src.services.bom_package_locator import BomPackageLocator, BomPackageLocatorError
 from src.services.bom_payload_builder import BomPayloadBuildInput, BomPayloadBuilder
-from src.services.bom_spreadsheet_parser import BomSpreadsheetParser
+from src.services.bom_spreadsheet_parser import BomSpreadsheetParser, BomSpreadsheetParserError
 from src.services.bom_standardizer import BomStandardizer
 
 
@@ -243,6 +243,131 @@ class BomUploadPipelineTests(unittest.TestCase):
         self.assertEqual(preview["processStandardizedProc"]["rows"][1]["ParentPart"], "ASM-1000")
         self.assertEqual(preview["processStandardizedProc"]["rows"][1]["MakeBuy"], "BUY")
 
+    def test_parser_accepts_minimum_required_bom_columns(self) -> None:
+        parser_service = BomSpreadsheetParser()
+        standardizer = BomStandardizer()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target_path = _write_inline_workbook(
+                Path(temp_dir) / "minimum-bom.xlsx",
+                [
+                    {
+                        "name": "BOM",
+                        "rows": [
+                            ["Part Number", "Revision", "Quantity", "Level"],
+                            ["ASM-1000", "A", 1, 0],
+                            ["COMP-200", "", 2, 1],
+                        ],
+                    }
+                ],
+            )
+            parsed = parser_service.parse(
+                filename=target_path.name,
+                content=target_path.read_bytes(),
+            )
+            standardized = standardizer.standardize(parsed)
+
+        self.assertEqual(parsed.sheet_name, "BOM")
+        self.assertEqual([column.header_name for column in parsed.columns], ["Part Number", "Revision", "Quantity", "Level"])
+        self.assertEqual(len(standardized.rows), 2)
+        self.assertIsNone(standardized.rows[0].description)
+        self.assertIsNone(standardized.rows[0].uom)
+        self.assertEqual(standardized.rows[1].parent_part, "ASM-1000")
+        self.assertIsNone(standardized.rows[1].item_number)
+        self.assertEqual(standardized.rows[1].part_number, "COMP-200")
+
+    def test_parser_accepts_required_header_variants(self) -> None:
+        parser_service = BomSpreadsheetParser()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workbook_path = _write_inline_workbook(
+                Path(temp_dir) / "header-variants.xlsx",
+                [
+                    {
+                        "name": "Customer Export",
+                        "rows": [
+                            ["Part #", "REV", "QTY", "Lvl"],
+                            ["ASM-1000", "A", 1, 0],
+                        ],
+                    }
+                ],
+            )
+            parsed = parser_service.parse(
+                filename=workbook_path.name,
+                content=workbook_path.read_bytes(),
+            )
+
+        self.assertEqual(
+            [column.canonical_field for column in parsed.columns],
+            ["part_number", "revision", "quantity", "bom_level"],
+        )
+
+    def test_parser_missing_required_columns_lists_only_missing_minimum_fields(self) -> None:
+        parser_service = BomSpreadsheetParser()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workbook_path = _write_inline_workbook(
+                Path(temp_dir) / "missing-required.xlsx",
+                [
+                    {
+                        "name": "BOM",
+                        "rows": [
+                            ["Part Number", "Revision", "Description", "Level"],
+                            ["ASM-1000", "A", "Assembly", 0],
+                        ],
+                    }
+                ],
+            )
+            with self.assertRaises(BomSpreadsheetParserError) as context:
+                parser_service.parse(
+                    filename=workbook_path.name,
+                    content=workbook_path.read_bytes(),
+                )
+
+        self.assertEqual(
+            str(context.exception),
+            "Worksheet 'BOM' is missing required columns: Quantity",
+        )
+
+    def test_service_preview_keeps_missing_optional_fields_blank(self) -> None:
+        db_service = FakeDbService()
+        service = BomIntakeService(db_service=db_service)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workbook_path = _write_inline_workbook(
+                Path(temp_dir) / "minimum-preview.xlsx",
+                [
+                    {
+                        "name": "BOM",
+                        "rows": [
+                            ["PartNumber", "Revision", "Qty", "Level"],
+                            ["ASM-1000", "A", 1, 0],
+                            ["COMP-200", "", 2, 1],
+                        ],
+                    }
+                ],
+            )
+            preview = service.preview_uploaded_bom(
+                header_data={
+                    "customer_name": "ACME",
+                    "uploaded_by": "estimator",
+                    "source_file_name": workbook_path.name,
+                },
+                upload_data={
+                    "filename": workbook_path.name,
+                    "content": workbook_path.read_bytes(),
+                },
+            )
+
+        preview_dict = preview.to_dict()
+        self.assertEqual(preview.root_count, 1)
+        self.assertEqual(preview.row_count, 2)
+        self.assertIsNone(preview.standardized_rows[0].description)
+        self.assertIsNone(preview_dict["bomRowsTvpRows"][0]["Description"])
+        self.assertIsNone(preview_dict["bomRowsTvpRows"][0]["UOM"])
+        self.assertEqual(preview_dict["bomRowsTvpRows"][1]["ParentPart"], "ASM-1000")
+        self.assertIsNone(preview_dict["bomRowsTvpRows"][1]["ItemNumber"])
+
     def test_service_dry_run_builds_payload_from_upload_path(self) -> None:
         db_service = FakeDbService()
         service = BomIntakeService(db_service=db_service)
@@ -418,6 +543,11 @@ def _materialize_fixture_workbook(fixture_name: str, target_dir: Path) -> Path:
     fixture = json.loads((FIXTURE_ROOT / fixture_name).read_text(encoding="utf-8"))
     workbook_path = target_dir / fixture_name.replace(".json", ".xlsx")
     _write_minimal_xlsx(workbook_path, fixture["sheets"])
+    return workbook_path
+
+
+def _write_inline_workbook(workbook_path: Path, sheets: list[dict[str, object]]) -> Path:
+    _write_minimal_xlsx(workbook_path, sheets)
     return workbook_path
 
 

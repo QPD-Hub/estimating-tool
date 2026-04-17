@@ -84,7 +84,7 @@ class StandardizedBomRow:
     part_number: str
     indented_part_number: str
     bom_level: int
-    description: str
+    description: str | None
     revision: str | None
     quantity: int | float | None
     uom: str | None
@@ -115,11 +115,7 @@ class StandardizedBomRow:
                 "indented_part_number",
             ),
         )
-        object.__setattr__(
-            self,
-            "description",
-            _normalize_required_text(self.description, "description"),
-        )
+        object.__setattr__(self, "description", _normalize_optional_text(self.description))
         object.__setattr__(self, "original_value", _normalize_optional_text(self.original_value))
         object.__setattr__(self, "parent_part", _normalize_optional_text(self.parent_part))
         object.__setattr__(self, "revision", _normalize_revision(self.revision))

@@ -12,9 +12,10 @@ from zipfile import BadZipFile, ZipFile
 CANONICAL_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "original_value": ("original", "original value"),
     "parent_part": ("parent part", "parent assembly", "parent"),
-    "part_number": ("part number", "part no", "part #", "pn"),
+    "part_number": ("part number", "partnumber", "part no", "part number", "pn"),
     "indented_part_number": (
         "indented part number",
+        "indented partnumber",
         "indented part no",
         "indented part",
         "indented pn",
@@ -38,6 +39,14 @@ CANONICAL_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 WORKSHEET_NAME_KEYWORDS = ("bom", "bill", "parts", "assembly")
+REQUIRED_CANONICAL_FIELDS = ("part_number", "revision", "quantity", "bom_level")
+REQUIRED_FIELD_DISPLAY_NAMES = {
+    "part_number": "Part Number",
+    "revision": "Revision",
+    "quantity": "Quantity",
+    "bom_level": "Level",
+}
+HEADER_SCORE_FIELDS = {"part_number", "revision", "quantity", "bom_level", "description"}
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +208,7 @@ def _select_and_parse_sheet(
         str,
         int,
         dict[str, int],
+        list[str],
         list[tuple[object, ...]],
         list[HeaderRowCandidateDiagnostic],
     ] | None = None
@@ -221,7 +231,13 @@ def _select_and_parse_sheet(
             continue
 
         try:
-            header_row_number, column_map, score, header_candidates = _detect_header_row(rows)
+            (
+                header_row_number,
+                column_map,
+                score,
+                header_candidates,
+                missing_required_fields,
+            ) = _detect_header_row(rows)
         except BomSpreadsheetParserError as exc:
             header_candidates = []
             if exc.diagnostics is not None:
@@ -251,6 +267,7 @@ def _select_and_parse_sheet(
             sheet_name,
             header_row_number,
             column_map,
+            missing_required_fields,
             rows,
             header_candidates,
         )
@@ -301,6 +318,7 @@ def _select_and_parse_sheet(
         sheet_name,
         header_row_number,
         column_map,
+        missing_required_fields,
         rows,
         header_candidates,
     ) = best_candidate
@@ -340,6 +358,12 @@ def _select_and_parse_sheet(
             for candidate in header_candidates
         ],
     )
+    if missing_required_fields:
+        raise BomSpreadsheetParserError(
+            f"Worksheet '{sheet_name}' is missing required columns: "
+            f"{', '.join(REQUIRED_FIELD_DISPLAY_NAMES[field] for field in missing_required_fields)}",
+            diagnostics=diagnostics,
+        )
     parsed_columns = [
         ParsedBomColumn(
             canonical_field=canonical_field,
@@ -382,7 +406,7 @@ def _select_and_parse_sheet(
 
 def _detect_header_row(
     rows: list[tuple[object, ...]],
-) -> tuple[int, dict[str, int], int, list[HeaderRowCandidateDiagnostic]]:
+) -> tuple[int, dict[str, int], int, list[HeaderRowCandidateDiagnostic], list[str]]:
     best: tuple[int, dict[str, int], int] | None = None
     candidates: list[HeaderRowCandidateDiagnostic] = []
 
@@ -398,7 +422,7 @@ def _detect_header_row(
             for canonical_field, aliases in CANONICAL_FIELD_ALIASES.items():
                 if normalized_value in aliases and canonical_field not in header_map:
                     header_map[canonical_field] = column_index
-                    score += 2 if canonical_field in {"part_number", "bom_level", "description"} else 1
+                    score += 2 if canonical_field in HEADER_SCORE_FIELDS else 1
                     break
 
         if header_map:
@@ -413,9 +437,7 @@ def _detect_header_row(
 
         if "bom_level" not in header_map:
             continue
-        if "description" not in header_map:
-            continue
-        if "part_number" not in header_map and "indented_part_number" not in header_map:
+        if not any(field in header_map for field in REQUIRED_CANONICAL_FIELDS):
             continue
 
         if best is None or score > best[2]:
@@ -433,14 +455,19 @@ def _detect_header_row(
             ),
         )
 
+    missing_required_fields = [
+        field for field in REQUIRED_CANONICAL_FIELDS if field not in best[1]
+    ]
+
     return best[0], best[1], best[2], sorted(
         candidates,
         key=lambda candidate: (-candidate.score, candidate.row_number),
-    )
+    ), missing_required_fields
 
 
 def _normalize_header_name(value: object) -> str:
     raw_value = _stringify_cell(value).lower()
+    raw_value = raw_value.replace("#", " number ")
     raw_value = re.sub(r"[^a-z0-9]+", " ", raw_value)
     return " ".join(raw_value.split())
 

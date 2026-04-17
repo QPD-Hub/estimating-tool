@@ -9,21 +9,18 @@ from openpyxl.utils.exceptions import InvalidFileException
 import xlrd
 
 REQUIRED_BOM_HEADERS = (
-    "ORIGINAL",
-    "Parent Part",
     "Part Number",
-    "Indented Part Number",
     "Revision",
-    "Description",
     "Quantity",
-    "UOM",
     "Level",
-    "Find No",
-    "Release Status",
-    "Critical Part",
-    "Procurement Type",
-    "Bulk Material",
 )
+
+REQUIRED_BOM_HEADER_ALIASES = {
+    "Part Number": ("part number", "partnumber", "part no", "part number", "pn"),
+    "Revision": ("revision", "rev"),
+    "Quantity": ("quantity", "qty"),
+    "Level": ("level", "bom level", "indent level", "lvl"),
+}
 
 
 class BomWorkbookError(ValueError):
@@ -130,21 +127,29 @@ def _extract_xls_bom_identity(workbook_content: bytes) -> BomIdentity:
 
 
 def _find_header_map(rows) -> tuple[dict[str, int], int]:
+    best_missing_headers = list(REQUIRED_BOM_HEADERS)
+
     for index, row in enumerate(rows, start=1):
-        header_map = {
-            _stringify_cell(value): column_index
-            for column_index, value in enumerate(row)
-            if _stringify_cell(value)
-        }
+        header_map: dict[str, int] = {}
+        for column_index, value in enumerate(row):
+            normalized_header = _normalize_header_name(value)
+            if not normalized_header:
+                continue
+            for required_header, aliases in REQUIRED_BOM_HEADER_ALIASES.items():
+                if normalized_header in aliases and required_header not in header_map:
+                    header_map[required_header] = column_index
+                    break
         missing_headers = [
             header for header in REQUIRED_BOM_HEADERS if header not in header_map
         ]
         if not missing_headers:
             return header_map, index
+        if len(missing_headers) < len(best_missing_headers):
+            best_missing_headers = missing_headers
 
     raise BomWorkbookError(
-        "Worksheet 'BOM' is missing one or more required columns: "
-        f"{', '.join(REQUIRED_BOM_HEADERS)}"
+        "Worksheet 'BOM' is missing required columns: "
+        f"{', '.join(best_missing_headers)}"
     )
 
 
@@ -180,3 +185,9 @@ def _stringify_cell(value: object) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _normalize_header_name(value: object) -> str:
+    normalized = _stringify_cell(value).lower().replace("#", " number ")
+    normalized = "".join(character if character.isalnum() else " " for character in normalized)
+    return " ".join(normalized.split())

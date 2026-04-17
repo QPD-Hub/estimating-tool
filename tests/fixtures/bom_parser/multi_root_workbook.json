@@ -4,11 +4,11 @@
       "name": "Assembly Parts",
       "rows": [
         ["Multi Root Package"],
-        ["Find No", "BOM Level", "Indented Part Number", "Description", "Revision", "Qty", "UOM", "Procurement Type"],
-        ["10", 0, "ASM-1000", "Assembly 1000", "A", 1, "EA", "MAKE"],
-        ["20", 1, "COMP-100", "Component 100", "", 2, "EA", "BUY"],
-        ["10", 0, "ASM-2000", "Assembly 2000", "B", 1, "EA", "MAKE"],
-        ["20", 1, "COMP-200", "Component 200", "", 3, "EA", "BUY"]
+        ["Find No", "BOM Level", "Part Number", "Indented Part Number", "Description", "Revision", "Qty", "UOM", "Procurement Type"],
+        ["10", 0, "ASM-1000", "ASM-1000", "Assembly 1000", "A", 1, "EA", "MAKE"],
+        ["20", 1, "COMP-100", "COMP-100", "Component 100", "", 2, "EA", "BUY"],
+        ["10", 0, "ASM-2000", "ASM-2000", "Assembly 2000", "B", 1, "EA", "MAKE"],
+        ["20", 1, "COMP-200", "COMP-200", "Component 200", "", 3, "EA", "BUY"]
       ]
     }
   ]

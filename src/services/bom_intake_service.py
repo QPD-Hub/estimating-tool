@@ -464,7 +464,7 @@ class BomIntakeService:
                             "indented_part_number",
                         ),
                         bom_level=_required_int(row_data, "bom_level"),
-                        description=_required_string(row_data, "description"),
+                        description=_optional_string(row_data, "description"),
                         revision=_optional_string(row_data, "revision"),
                         quantity=_optional_number(row_data, "quantity"),
                         uom=_optional_string(row_data, "uom"),
