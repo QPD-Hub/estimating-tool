@@ -24,6 +24,7 @@ sys.modules.setdefault("xlrd", xlrd_module)
 
 from src.config import AppConfig
 from src.services.bom_intake_service import BomIntakeRequestError, BomIntakeService
+from src.services.doc_package_intake_service import DocPackageIntakeResult
 from src.services.document_intake_service import (
     DocumentIntakeResult,
 )
@@ -215,6 +216,71 @@ class FakeDbService:
         }
 
 
+class FakeDocPackageIntakeService:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[dict[str, object]] = []
+
+    def intake_package(
+        self,
+        *,
+        customer_name,
+        part_number,
+        uploaded_by,
+        uploaded_files,
+        quote_number=None,
+        intake_notes=None,
+    ):
+        self.calls.append(
+            {
+                "customer_name": customer_name,
+                "part_number": part_number,
+                "uploaded_by": uploaded_by,
+                "uploaded_files": list(uploaded_files),
+                "quote_number": quote_number,
+                "intake_notes": intake_notes,
+            }
+        )
+        if self.fail:
+            raise ValueError("forced failure")
+
+        document_result = DocumentIntakeResult(
+            customer_name=customer_name,
+            part_number=part_number,
+            sanitized_customer_folder_name="ACME",
+            sanitized_part_folder_name="PART-100",
+            automation_path=Path("/tmp/automation/ACME/PART-100"),
+            working_path=Path("/tmp/work/ACME/PART-100"),
+            uploaded_files_count=len(list(uploaded_files)),
+            processed_files=["bom.xlsx", "drawing.pdf"],
+            extension_summary={".pdf": 1, ".xlsx": 1},
+        )
+        return DocPackageIntakeResult(
+            customer_name=customer_name,
+            part_number=part_number,
+            uploaded_by=uploaded_by,
+            uploaded_files_count=len(list(uploaded_files)),
+            selected_bom_file_name="bom.xlsx",
+            document_result=document_result,
+            bom_preview=types.SimpleNamespace(
+                detected_worksheet="BOM",
+                detected_source_type="spreadsheet_upload",
+            ),
+            bom_result={
+                "Summary": {
+                    "BomIntakeId": 987,
+                    "DetectedRootCount": 1,
+                    "AcceptedRootCount": 1,
+                    "DuplicateRejectedCount": 0,
+                    "FinalIntakeStatus": "processed",
+                },
+                "RootResults": [],
+            },
+            quote_number=quote_number,
+            intake_notes=intake_notes,
+        )
+
+
 def _request_payload() -> dict[str, object]:
     return {
         "header": {
@@ -280,6 +346,7 @@ class WebBomIntakeApiTests(unittest.TestCase):
             ViewState(
                 customer="ACME",
                 part_number="PART-100",
+                uploaded_by="estimator",
                 message="Processed 4 file(s) for ACME / PART-100 into both configured roots.",
                 result=result,
             ),
@@ -293,6 +360,7 @@ class WebBomIntakeApiTests(unittest.TestCase):
         self.assertIn("<span>[no extension]</span><strong>1</strong>", page)
         self.assertIn("Automation destination", page)
         self.assertIn("Working destination", page)
+        self.assertIn("Doc Package Intake", page)
 
     def test_api_happy_path_returns_summary(self) -> None:
         fake_service = FakeBomIntakeService()
@@ -504,7 +572,7 @@ class WebBomIntakeApiTests(unittest.TestCase):
         self.assertEqual(payload["diagnostics"]["selectedWorksheetName"], "Sheet1")
         self.assertEqual(len(payload["diagnostics"]["candidateSpreadsheets"]), 2)
 
-    def test_root_page_renders_bom_upload_ui(self) -> None:
+    def test_root_page_renders_doc_package_upload_ui(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             app = create_app(
                 AppConfig(
@@ -520,10 +588,47 @@ class WebBomIntakeApiTests(unittest.TestCase):
 
         self.assertEqual(status, "200 OK")
         self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
-        self.assertIn("BOM Upload And Intake", body)
-        self.assertIn('id="preview-button"', body)
-        self.assertIn("/api/dev/bom-intake/preview", body)
-        self.assertIn('id="bom-debug"', body)
+        self.assertIn("Doc Package Intake", body)
+        self.assertIn('name="uploaded_by"', body)
+        self.assertIn('name="documents"', body)
+        self.assertIn("Process Doc Package", body)
+
+    def test_root_post_routes_package_to_doc_package_intake_service(self) -> None:
+        fake_package_service = FakeDocPackageIntakeService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                bom_intake_service_override=FakeBomIntakeService(),
+                doc_package_intake_service_override=fake_package_service,
+            )
+
+            status, headers, body = _invoke_multipart(
+                app,
+                "/",
+                fields={
+                    "customer": "ACME",
+                    "part_number": "PART-100",
+                    "uploaded_by": "estimator",
+                    "quote_number": "Q-100",
+                    "intake_notes": "same workflow",
+                },
+                file_field_name="documents",
+                filename="bom.xlsx",
+                content=b"fake workbook bytes",
+            )
+
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
+        self.assertEqual(fake_package_service.calls[0]["customer_name"], "ACME")
+        self.assertEqual(fake_package_service.calls[0]["uploaded_by"], "estimator")
+        self.assertIn("Doc Package Intake Complete", body)
+        self.assertIn("BOM Intake Overview", body)
+        self.assertIn("bom.xlsx", body)
 
 
 def _invoke_json(app, path: str, payload: dict[str, object]):

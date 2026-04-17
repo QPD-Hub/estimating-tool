@@ -24,10 +24,14 @@ from src.services.bom_intake_service import (
     BomIntakeService,
 )
 from src.services.document_intake_service import (
-    DocumentIntakeError,
     DocumentIntakeResult,
     DocumentIntakeService,
     UploadedFile,
+)
+from src.services.doc_package_intake_service import (
+    DocPackageIntakeError,
+    DocPackageIntakeResult,
+    DocPackageIntakeService,
 )
 
 logging.basicConfig(
@@ -43,30 +47,51 @@ BOM_UPLOAD_ALLOWED_SUFFIXES = (".xlsx", ".xls", ".zip")
 class ViewState:
     customer: str = ""
     part_number: str = ""
+    uploaded_by: str = ""
+    quote_number: str = ""
+    intake_notes: str = ""
     message: str = ""
     error: str = ""
     result: DocumentIntakeResult | None = None
+    package_result: DocPackageIntakeResult | None = None
+    diagnostics: dict[str, object] | None = None
 
 
 def create_app(
     config: AppConfig,
     bom_intake_service_override: BomIntakeService | None = None,
+    doc_package_intake_service_override: DocPackageIntakeService | None = None,
 ) -> Callable:
-    service = DocumentIntakeService(
+    document_service = DocumentIntakeService(
         automation_drop_root=config.automation_drop_root,
         work_root=config.work_root,
     )
     bom_intake_service: BomIntakeService | None = bom_intake_service_override
+    doc_package_intake_service: DocPackageIntakeService | None = (
+        doc_package_intake_service_override
+    )
 
     def app(environ, start_response):
-        nonlocal bom_intake_service
+        nonlocal bom_intake_service, doc_package_intake_service
         method = environ.get("REQUEST_METHOD", "GET").upper()
         path = environ.get("PATH_INFO", "/")
 
         if path == "/" and method == "GET":
             return _respond_html(start_response, render_page(config, ViewState()))
         if path == "/" and method == "POST":
-            return _handle_upload(environ, start_response, config, service)
+            if doc_package_intake_service is None:
+                if bom_intake_service is None:
+                    bom_intake_service = _build_bom_intake_service()
+                doc_package_intake_service = DocPackageIntakeService(
+                    document_intake_service=document_service,
+                    bom_intake_service=bom_intake_service,
+                )
+            return _handle_upload(
+                environ,
+                start_response,
+                config,
+                doc_package_intake_service,
+            )
         if path == "/api/dev/bom-intake" and method == "POST":
             if bom_intake_service is None:
                 bom_intake_service = _build_bom_intake_service()
@@ -97,13 +122,24 @@ def create_app(
     return app
 
 
-def _handle_upload(environ, start_response, config, service: DocumentIntakeService):
+def _handle_upload(
+    environ,
+    start_response,
+    config,
+    service: DocPackageIntakeService,
+):
     customer = ""
     part_number = ""
+    uploaded_by = ""
+    quote_number = ""
+    intake_notes = ""
     try:
         form = _parse_form_request(environ)
         customer = form.getfirst("customer", "")
         part_number = form.getfirst("part_number", "")
+        uploaded_by = form.getfirst("uploaded_by", "")
+        quote_number = form.getfirst("quote_number", "")
+        intake_notes = form.getfirst("intake_notes", "")
         file_fields = form["documents"] if "documents" in form else []
         if not isinstance(file_fields, list):
             file_fields = [file_fields]
@@ -119,10 +155,17 @@ def _handle_upload(environ, start_response, config, service: DocumentIntakeServi
                 )
             )
 
-        result = service.intake_documents(customer, part_number, uploaded_files)
+        result = service.intake_package(
+            customer_name=customer,
+            part_number=part_number,
+            uploaded_by=uploaded_by,
+            quote_number=quote_number,
+            intake_notes=intake_notes,
+            uploaded_files=uploaded_files,
+        )
         message = (
-            f"Processed {len(result.processed_files)} file(s) for "
-            f"{result.customer_name} / {result.part_number} into both configured roots."
+            f"Processed {len(result.document_result.processed_files)} file(s) and "
+            f"completed BOM intake for {result.customer_name} / {result.part_number}."
         )
         return _respond_html(
             start_response,
@@ -131,13 +174,17 @@ def _handle_upload(environ, start_response, config, service: DocumentIntakeServi
                 ViewState(
                     customer=result.customer_name,
                     part_number=result.part_number,
+                    uploaded_by=result.uploaded_by,
+                    quote_number=result.quote_number or "",
+                    intake_notes=result.intake_notes or "",
                     message=message,
-                    result=result,
+                    result=result.document_result,
+                    package_result=result,
                 ),
             ),
         )
-    except DocumentIntakeError as exc:
-        logger.warning("Document intake validation failed: %s", exc)
+    except DocPackageIntakeError as exc:
+        logger.warning("Doc package intake validation failed: %s", exc)
         return _respond_html(
             start_response,
             render_page(
@@ -145,13 +192,18 @@ def _handle_upload(environ, start_response, config, service: DocumentIntakeServi
                 ViewState(
                     customer=customer,
                     part_number=part_number,
+                    uploaded_by=uploaded_by,
+                    quote_number=quote_number,
+                    intake_notes=intake_notes,
                     error=str(exc),
+                    result=exc.document_result,
+                    diagnostics=exc.diagnostics,
                 ),
             ),
             status=HTTPStatus.BAD_REQUEST,
         )
     except Exception:
-        logger.exception("Unexpected document intake error.")
+        logger.exception("Unexpected doc package intake error.")
         return _respond_html(
             start_response,
             render_page(
@@ -159,7 +211,10 @@ def _handle_upload(environ, start_response, config, service: DocumentIntakeServi
                 ViewState(
                     customer=customer,
                     part_number=part_number,
-                    error="Unexpected server error while processing the upload.",
+                    uploaded_by=uploaded_by,
+                    quote_number=quote_number,
+                    intake_notes=intake_notes,
+                    error="Unexpected server error while processing the document package.",
                 ),
             ),
             status=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -547,18 +602,8 @@ def _group_processed_files_by_extension(
 
 def render_page(config: AppConfig, view_state: ViewState) -> str:
     app_env = html.escape(config.app_env)
-
     processed_document_overview_html = ""
-    if view_state.error:
-        processed_document_overview_html = (
-            '<section class="stack" id="processed-document-overview" aria-live="polite">'
-            '<div class="callout error">'
-            "<h3>Processed Document Overview</h3>"
-            f"<p>{html.escape(view_state.error)}</p>"
-            "</div>"
-            "</section>"
-        )
-    elif view_state.result:
+    if view_state.result:
         result = view_state.result
         processed_files_by_extension = _group_processed_files_by_extension(
             result.extension_summary
@@ -575,10 +620,9 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             for extension, count in processed_files_by_extension
         )
         processed_document_overview_html = (
-            '<section class="stack" id="processed-document-overview" aria-live="polite">'
-            '<div class="callout success">'
-            "<h3>Processed Document Overview</h3>"
-            f"<p>{html.escape(view_state.message)}</p>"
+            "<div class=\"stack\">"
+            "<div class=\"overview-card\">"
+            "<h4>Processed Document Overview</h4>"
             "<dl class=\"summary-grid\">"
             f"<div><dt>Customer</dt><dd>{html.escape(result.customer_name)}</dd></div>"
             f"<div><dt>Part Number</dt><dd>{html.escape(result.part_number)}</dd></div>"
@@ -589,7 +633,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             f"<div><dt>Automation destination</dt><dd>{html.escape(str(result.automation_path))}</dd></div>"
             f"<div><dt>Working destination</dt><dd>{html.escape(str(result.working_path))}</dd></div>"
             "</dl>"
-            "<div class=\"stack\">"
+            "</div>"
             "<div class=\"overview-card\">"
             "<h4>Processed Filenames</h4>"
             "<p class=\"section-note\">Final flattened filenames written to both configured roots for this request.</p>"
@@ -603,7 +647,95 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             f"{processed_files_by_extension_html}</ul>"
             "</div>"
             "</div>"
+        )
+
+    bom_result_html = ""
+    if view_state.package_result:
+        bom_result = _serialize_bom_intake_result(view_state.package_result.bom_result)
+        summary = bom_result["summary"]
+        root_results = bom_result["rootResults"]
+        root_results_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(str(root_result.get('rootClientId') or ''))}</td>"
+            f"<td>{html.escape(str(root_result.get('rootSequence') or ''))}</td>"
+            f"<td>{html.escape(str(root_result.get('customerName') or ''))}</td>"
+            f"<td>{html.escape(str(root_result.get('level0PartNumber') or ''))}</td>"
+            f"<td>{html.escape(str(root_result.get('revision') or ''))}</td>"
+            f"<td>{html.escape(str(root_result.get('decisionStatus') or ''))}</td>"
+            f"<td>{html.escape(str(root_result.get('decisionReason') or ''))}</td>"
+            f"<td>{html.escape(str(root_result.get('bomRootId') or ''))}</td>"
+            f"<td>{html.escape(str(root_result.get('existingBomRootId') or ''))}</td>"
+            "</tr>"
+            for root_result in root_results
+        )
+        bom_result_html = (
+            "<div class=\"overview-card\">"
+            "<h4>BOM Intake Overview</h4>"
+            "<dl class=\"summary-grid\">"
+            f"<div><dt>Selected BOM file</dt><dd>{html.escape(view_state.package_result.selected_bom_file_name)}</dd></div>"
+            f"<div><dt>Detected worksheet</dt><dd>{html.escape(view_state.package_result.bom_preview.detected_worksheet)}</dd></div>"
+            f"<div><dt>Detected source type</dt><dd>{html.escape(view_state.package_result.bom_preview.detected_source_type)}</dd></div>"
+            f"<div><dt>BomIntakeId</dt><dd>{html.escape(str(summary.get('bomIntakeId') or ''))}</dd></div>"
+            f"<div><dt>DetectedRootCount</dt><dd>{html.escape(str(summary.get('detectedRootCount') or ''))}</dd></div>"
+            f"<div><dt>AcceptedRootCount</dt><dd>{html.escape(str(summary.get('acceptedRootCount') or ''))}</dd></div>"
+            f"<div><dt>DuplicateRejectedCount</dt><dd>{html.escape(str(summary.get('duplicateRejectedCount') or ''))}</dd></div>"
+            f"<div><dt>FinalIntakeStatus</dt><dd>{html.escape(str(summary.get('finalIntakeStatus') or ''))}</dd></div>"
+            "</dl>"
             "</div>"
+            + (
+                "<div class=\"overview-card\">"
+                "<h4>BOM Root Results</h4>"
+                "<div class=\"table-wrap\">"
+                "<table>"
+                "<thead><tr><th>Root</th><th>Sequence</th><th>Customer</th><th>Level 0 Part</th><th>Revision</th><th>Decision</th><th>Reason</th><th>BomRootId</th><th>ExistingBomRootId</th></tr></thead>"
+                f"<tbody>{root_results_html}</tbody>"
+                "</table>"
+                "</div>"
+                "</div>"
+                if root_results
+                else ""
+            )
+        )
+
+    diagnostics_html = ""
+    if view_state.diagnostics:
+        diagnostics_html = (
+            "<details>"
+            "<summary>Preview Diagnostics</summary>"
+            f"<textarea class=\"json-viewer\" readonly>{html.escape(json.dumps(view_state.diagnostics, indent=2))}</textarea>"
+            "</details>"
+        )
+
+    callout_html = ""
+    if view_state.error:
+        callout_html = (
+            '<section class="stack" id="processed-document-overview" aria-live="polite">'
+            '<div class="callout error">'
+            "<h3>Doc Package Intake Error</h3>"
+            f"<p>{html.escape(view_state.error)}</p>"
+            "</div>"
+            f"{diagnostics_html}"
+            "</section>"
+        )
+    elif view_state.package_result:
+        callout_html = (
+            '<section class="stack" id="processed-document-overview" aria-live="polite">'
+            '<div class="callout success">'
+            "<h3>Doc Package Intake Complete</h3>"
+            f"<p>{html.escape(view_state.message)}</p>"
+            "</div>"
+            f"{processed_document_overview_html}"
+            f"{bom_result_html}"
+            "</section>"
+        )
+    elif view_state.result:
+        callout_html = (
+            '<section class="stack" id="processed-document-overview" aria-live="polite">'
+            '<div class="callout success">'
+            "<h3>Processed Document Overview</h3>"
+            f"<p>{html.escape(view_state.message)}</p>"
+            "</div>"
+            f"{processed_document_overview_html}"
             "</section>"
         )
 
@@ -612,7 +744,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BOM Intake</title>
+  <title>Doc Package Intake</title>
   <style>
     :root {{
       color-scheme: light;
@@ -914,15 +1046,15 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
   <main>
     <section class="panel hero">
       <span class="eyebrow">Environment: {app_env}</span>
-      <h1>BOM Upload And Intake</h1>
-      <p>Upload a BOM workbook or package, preview the standardized SQL-bound payload, then execute intake processing without leaving the app. The UI runs the existing locator, parser, standardizer, payload builder, and stored procedure flow.</p>
+      <h1>Doc Package Intake</h1>
+      <p>Upload a customer document package once. The intake flow flattens and mirrors the processed files into both configured roots, then resolves and processes the BOM intake from the same uploaded package.</p>
     </section>
 
     <section class="panel">
       <div class="section-header">
         <div class="stack">
-          <h2>Document Intake Workflow</h2>
-          <p class="subtle">Upload customer package documents, flatten zip contents into processed outputs, and write the same processed document set to matching customer and part folders in both configured roots.</p>
+          <h2>Doc Package Intake</h2>
+          <p class="subtle">Include the full customer package here. The intake flow writes the processed document set to both configured roots and runs BOM intake from the same uploaded files.</p>
         </div>
       </div>
 
@@ -936,441 +1068,33 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             Part Number
             <input id="part_number" name="part_number" type="text" required value="{html.escape(view_state.part_number)}">
           </label>
-          <label for="documents">
-            Documents
-            <input id="documents" name="documents" type="file" multiple required>
-          </label>
-        </div>
-
-        <div class="actions">
-          <button type="submit">Process Documents</button>
-          <span class="status-line">Processing flattens zip contents and mirrors the processed outputs into both configured roots.</span>
-        </div>
-      </form>
-
-      {processed_document_overview_html}
-    </section>
-
-    <section class="panel">
-      <div class="section-header">
-        <div class="stack">
-          <h2>BOM Intake Workflow</h2>
-          <p class="subtle">Accepted uploads: `.xlsx`, `.xls`, `.zip`. Preview does not write to SQL. Process runs the create + standardized intake procedures.</p>
-        </div>
-      </div>
-
-      <form id="bom-intake-form" enctype="multipart/form-data" novalidate>
-        <div class="form-grid">
-          <label for="customer_name">
-            Customer Name
-            <input id="customer_name" name="customer_name" type="text" required>
-          </label>
           <label for="uploaded_by">
             Uploaded By
-            <input id="uploaded_by" name="uploaded_by" type="text" required>
+            <input id="uploaded_by" name="uploaded_by" type="text" required value="{html.escape(view_state.uploaded_by)}">
           </label>
           <label for="quote_number">
             Quote Number
-            <input id="quote_number" name="quote_number" type="text">
+            <input id="quote_number" name="quote_number" type="text" value="{html.escape(view_state.quote_number)}">
           </label>
-          <label for="bom_file">
-            BOM File
-            <input id="bom_file" name="bom_file" type="file" accept=".xlsx,.xls,.zip" required>
+          <label for="documents">
+            Package Files
+            <input id="documents" name="documents" type="file" multiple required>
           </label>
         </div>
 
         <label for="intake_notes">
           Intake Notes
-          <textarea id="intake_notes" name="intake_notes" placeholder="Optional notes for the BOM intake record"></textarea>
+          <textarea id="intake_notes" name="intake_notes" placeholder="Optional notes for the intake record">{html.escape(view_state.intake_notes)}</textarea>
         </label>
 
         <div class="actions">
-          <button type="button" id="preview-button">Preview Payload</button>
-          <button type="button" class="secondary" id="process-button">Process Intake</button>
-          <span class="status-line" id="bom-status" aria-live="polite"></span>
+          <button type="submit">Process Doc Package</button>
+          <span class="status-line">Processing flattens zip contents, mirrors the processed outputs into both configured roots, and runs BOM intake from the same package.</span>
         </div>
       </form>
 
-      <section id="bom-error" class="callout error hidden" aria-live="polite"></section>
-
-      <section id="bom-debug" class="stack hidden" aria-live="polite">
-        <div class="callout">
-          <h3>Preview Diagnostics</h3>
-          <p>This temporary debug panel shows package selection, worksheet selection, and header detection details from the current preview attempt.</p>
-        </div>
-        <dl class="summary-grid" id="debug-summary"></dl>
-        <details open>
-          <summary>Candidate Spreadsheets</summary>
-          <textarea id="debug-candidate-spreadsheets-json" class="json-viewer" readonly></textarea>
-        </details>
-        <details>
-          <summary>Worksheet Diagnostics</summary>
-          <textarea id="debug-worksheets-json" class="json-viewer" readonly></textarea>
-        </details>
-        <details>
-          <summary>Header Candidate Rows</summary>
-          <textarea id="debug-header-candidates-json" class="json-viewer" readonly></textarea>
-        </details>
-        <details>
-          <summary>First Rows Preview</summary>
-          <textarea id="debug-first-rows-json" class="json-viewer" readonly></textarea>
-        </details>
-        <details id="debug-error-details" class="hidden">
-          <summary>Diagnostic Error Details</summary>
-          <textarea id="debug-error-json" class="json-viewer" readonly></textarea>
-        </details>
-      </section>
-
-      <section id="bom-preview" class="stack hidden" aria-live="polite">
-        <div class="callout success">
-          <h3>Preview Ready</h3>
-          <p>The payload preview below reflects the exact SQL-bound roots and rows the app will send during intake processing.</p>
-        </div>
-
-        <dl class="summary-grid" id="preview-summary"></dl>
-
-        <div class="table-wrap">
-          <table id="standardized-rows-table">
-            <thead>
-              <tr>
-                <th>Row</th>
-                <th>Level</th>
-                <th>Part Number</th>
-                <th>Parent Part</th>
-                <th>Description</th>
-                <th>Revision</th>
-                <th>Quantity</th>
-                <th>UOM</th>
-                <th>Item</th>
-                <th>Make/Buy</th>
-                <th>Validation</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-
-        <details open>
-          <summary>Standardized Rows JSON</summary>
-          <textarea id="standardized-rows-json" class="json-viewer" readonly></textarea>
-        </details>
-        <details>
-          <summary>Create Proc Params</summary>
-          <textarea id="create-proc-json" class="json-viewer" readonly></textarea>
-        </details>
-        <details>
-          <summary>Process Proc Params</summary>
-          <textarea id="process-proc-json" class="json-viewer" readonly></textarea>
-        </details>
-        <details>
-          <summary>Roots TVP Rows</summary>
-          <textarea id="roots-json" class="json-viewer" readonly></textarea>
-        </details>
-        <details>
-          <summary>BOM Rows TVP Rows</summary>
-          <textarea id="bom-rows-json" class="json-viewer" readonly></textarea>
-        </details>
-      </section>
-
-      <section id="bom-process-result" class="stack hidden" aria-live="polite">
-        <div class="callout success">
-          <h3>Intake Processed</h3>
-          <p>The intake summary below reflects the SQL execution result for the uploaded BOM.</p>
-        </div>
-        <dl class="summary-grid" id="process-summary"></dl>
-        <div class="table-wrap">
-          <table id="root-results-table">
-            <thead>
-              <tr>
-                <th>Root</th>
-                <th>Sequence</th>
-                <th>Customer</th>
-                <th>Level 0 Part</th>
-                <th>Revision</th>
-                <th>Decision</th>
-                <th>Reason</th>
-                <th>BomRootId</th>
-                <th>ExistingBomRootId</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </section>
+      {callout_html}
     </section>
   </main>
-  <script>
-    const bomForm = document.getElementById("bom-intake-form");
-    const previewButton = document.getElementById("preview-button");
-    const processButton = document.getElementById("process-button");
-    const bomStatus = document.getElementById("bom-status");
-    const bomError = document.getElementById("bom-error");
-    const bomDebug = document.getElementById("bom-debug");
-    const bomPreview = document.getElementById("bom-preview");
-    const bomProcessResult = document.getElementById("bom-process-result");
-    const previewSummary = document.getElementById("preview-summary");
-    const debugSummary = document.getElementById("debug-summary");
-    const processSummary = document.getElementById("process-summary");
-    const standardizedRowsTableBody = document.querySelector("#standardized-rows-table tbody");
-    const rootResultsTableBody = document.querySelector("#root-results-table tbody");
-    const standardizedRowsJson = document.getElementById("standardized-rows-json");
-    const createProcJson = document.getElementById("create-proc-json");
-    const processProcJson = document.getElementById("process-proc-json");
-    const rootsJson = document.getElementById("roots-json");
-    const bomRowsJson = document.getElementById("bom-rows-json");
-    const debugCandidateSpreadsheetsJson = document.getElementById("debug-candidate-spreadsheets-json");
-    const debugWorksheetsJson = document.getElementById("debug-worksheets-json");
-    const debugHeaderCandidatesJson = document.getElementById("debug-header-candidates-json");
-    const debugFirstRowsJson = document.getElementById("debug-first-rows-json");
-    const debugErrorDetails = document.getElementById("debug-error-details");
-    const debugErrorJson = document.getElementById("debug-error-json");
-
-    function setBusy(isBusy, message) {{
-      previewButton.disabled = isBusy;
-      processButton.disabled = isBusy;
-      previewButton.textContent = isBusy && message === "preview" ? "Previewing..." : "Preview Payload";
-      processButton.textContent = isBusy && message === "process" ? "Processing..." : "Process Intake";
-      bomStatus.textContent = isBusy
-        ? message === "preview"
-          ? "Running locator, parser, standardizer, and payload preview..."
-          : "Running BOM intake create and process procedures..."
-        : "";
-    }}
-
-    function showBomError(message) {{
-      bomError.textContent = message;
-      bomError.classList.remove("hidden");
-    }}
-
-    function hideBomError() {{
-      bomError.textContent = "";
-      bomError.classList.add("hidden");
-    }}
-
-    function clearProcessResult() {{
-      bomProcessResult.classList.add("hidden");
-      processSummary.innerHTML = "";
-      rootResultsTableBody.innerHTML = "";
-    }}
-
-    function clearPreviewDebug() {{
-      bomPreview.classList.add("hidden");
-      bomDebug.classList.add("hidden");
-      previewSummary.innerHTML = "";
-      debugSummary.innerHTML = "";
-      standardizedRowsTableBody.innerHTML = "";
-      standardizedRowsJson.value = "";
-      createProcJson.value = "";
-      processProcJson.value = "";
-      rootsJson.value = "";
-      bomRowsJson.value = "";
-      debugCandidateSpreadsheetsJson.value = "";
-      debugWorksheetsJson.value = "";
-      debugHeaderCandidatesJson.value = "";
-      debugFirstRowsJson.value = "";
-      debugErrorJson.value = "";
-      debugErrorDetails.classList.add("hidden");
-    }}
-
-    function validateBomForm() {{
-      const customer = bomForm.customer_name.value.trim();
-      const uploadedBy = bomForm.uploaded_by.value.trim();
-      const file = bomForm.bom_file.files[0];
-
-      if (!customer) {{
-        throw new Error("Customer Name is required.");
-      }}
-      if (!uploadedBy) {{
-        throw new Error("Uploaded By is required.");
-      }}
-      if (!file) {{
-        throw new Error("A BOM spreadsheet or zip package is required.");
-      }}
-
-      const lowerName = file.name.toLowerCase();
-      if (![".xlsx", ".xls", ".zip"].some((suffix) => lowerName.endsWith(suffix))) {{
-        throw new Error("Upload a .xlsx, .xls, or .zip BOM file.");
-      }}
-    }}
-
-    function renderSummaryList(container, items) {{
-      container.innerHTML = items.map(([label, value]) => `
-        <div>
-          <dt>${{escapeHtml(label)}}</dt>
-          <dd>${{escapeHtml(value ?? "")}}</dd>
-        </div>
-      `).join("");
-    }}
-
-    function renderPreview(preview) {{
-      renderSummaryList(previewSummary, [
-        ["Selected File Name", preview.selectedFileName],
-        ["Detected Worksheet", preview.detectedWorksheet],
-        ["Detected Source Type", preview.detectedSourceType],
-        ["Source File Path", preview.sourceFilePath || ""],
-        ["Root Count", String(preview.rootCount ?? "")],
-        ["Row Count", String(preview.rowCount ?? "")]
-      ]);
-
-      standardizedRowsTableBody.innerHTML = (preview.standardizedRows || []).map((row) => `
-        <tr>
-          <td>${{escapeHtml(row.source_row_number)}}</td>
-          <td>${{escapeHtml(row.bom_level)}}</td>
-          <td>${{escapeHtml(row.part_number)}}</td>
-          <td>${{escapeHtml(row.parent_part || "")}}</td>
-          <td>${{escapeHtml(row.description)}}</td>
-          <td>${{escapeHtml(row.revision || "")}}</td>
-          <td>${{escapeHtml(row.quantity ?? "")}}</td>
-          <td>${{escapeHtml(row.uom || "")}}</td>
-          <td>${{escapeHtml(row.item_number || "")}}</td>
-          <td>${{escapeHtml(row.make_buy || "")}}</td>
-          <td>${{escapeHtml(row.validation_message || "")}}</td>
-        </tr>
-      `).join("");
-
-      standardizedRowsJson.value = formatJson(preview.standardizedRows || []);
-      createProcJson.value = formatJson(preview.createProcParams || {{}});
-      processProcJson.value = formatJson(preview.processProcParams || {{}});
-      rootsJson.value = formatJson(preview.rootsTvpRows || []);
-      bomRowsJson.value = formatJson(preview.bomRowsTvpRows || []);
-
-      bomPreview.classList.remove("hidden");
-      renderDiagnostics(preview.diagnostics || null);
-    }}
-
-    function renderProcessResult(result) {{
-      const summary = result.summary || {{}};
-      renderSummaryList(processSummary, [
-        ["BomIntakeId", String(summary.bomIntakeId ?? "")],
-        ["DetectedRootCount", String(summary.detectedRootCount ?? "")],
-        ["AcceptedRootCount", String(summary.acceptedRootCount ?? "")],
-        ["DuplicateRejectedCount", String(summary.duplicateRejectedCount ?? "")],
-        ["FinalIntakeStatus", summary.finalIntakeStatus || ""]
-      ]);
-
-      rootResultsTableBody.innerHTML = (result.rootResults || []).map((row) => `
-        <tr>
-          <td>${{escapeHtml(row.rootClientId || "")}}</td>
-          <td>${{escapeHtml(row.rootSequence ?? "")}}</td>
-          <td>${{escapeHtml(row.customerName || "")}}</td>
-          <td>${{escapeHtml(row.level0PartNumber || "")}}</td>
-          <td>${{escapeHtml(row.revision || "")}}</td>
-          <td>${{escapeHtml(row.decisionStatus || "")}}</td>
-          <td>${{escapeHtml(row.decisionReason || "")}}</td>
-          <td>${{escapeHtml(row.bomRootId ?? "")}}</td>
-          <td>${{escapeHtml(row.existingBomRootId ?? "")}}</td>
-        </tr>
-      `).join("");
-
-      bomProcessResult.classList.remove("hidden");
-    }}
-
-    function formatJson(value) {{
-      return JSON.stringify(value, null, 2);
-    }}
-
-    function renderDiagnostics(diagnostics, errorMessage = "") {{
-      if (!diagnostics) {{
-        bomDebug.classList.add("hidden");
-        debugSummary.innerHTML = "";
-        debugCandidateSpreadsheetsJson.value = "";
-        debugWorksheetsJson.value = "";
-        debugHeaderCandidatesJson.value = "";
-        debugFirstRowsJson.value = "";
-        debugErrorJson.value = "";
-        debugErrorDetails.classList.add("hidden");
-        return;
-      }}
-
-      renderSummaryList(debugSummary, [
-        ["Selected File", diagnostics.selectedSourceFileName || ""],
-        ["Selected Archive Member", diagnostics.selectedArchiveMemberName || ""],
-        ["Selected Worksheet", diagnostics.selectedWorksheetName || ""],
-        ["Worksheet Names", (diagnostics.worksheetNames || []).join(", ")],
-        ["Archive Selection Reason", diagnostics.archiveSelection?.selectionReason || ""]
-      ]);
-
-      debugCandidateSpreadsheetsJson.value = formatJson(diagnostics.candidateSpreadsheets || []);
-      debugWorksheetsJson.value = formatJson(diagnostics.worksheets || []);
-      debugHeaderCandidatesJson.value = formatJson(diagnostics.headerRowCandidates || []);
-      debugFirstRowsJson.value = formatJson(diagnostics.firstRowsPreview || []);
-
-      if (errorMessage) {{
-        debugErrorJson.value = formatJson({{
-          error: errorMessage,
-          diagnostics
-        }});
-        debugErrorDetails.classList.remove("hidden");
-      }} else {{
-        debugErrorJson.value = "";
-        debugErrorDetails.classList.add("hidden");
-      }}
-
-      bomDebug.classList.remove("hidden");
-    }}
-
-    function escapeHtml(value) {{
-      return String(value)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#39;");
-    }}
-
-    async function runBomAction(action) {{
-      hideBomError();
-      clearPreviewDebug();
-      if (action === "preview") {{
-        clearProcessResult();
-      }}
-
-      try {{
-        validateBomForm();
-      }} catch (error) {{
-        showBomError(error.message);
-        return;
-      }}
-
-      const formData = new FormData(bomForm);
-      setBusy(true, action);
-
-      try {{
-        const response = await fetch(
-          action === "preview" ? "/api/dev/bom-intake/preview" : "/api/dev/bom-intake/process",
-          {{
-            method: "POST",
-            body: formData
-          }}
-        );
-        const payload = await response.json();
-
-        if (!response.ok) {{
-          const error = new Error(payload.error || "Request failed.");
-          error.diagnostics = payload.diagnostics || null;
-          throw error;
-        }}
-
-        if (action === "preview") {{
-          renderPreview(payload);
-        }} else {{
-          renderProcessResult(payload);
-        }}
-      }} catch (error) {{
-        showBomError(error.message || "Unexpected request failure.");
-        renderDiagnostics(error.diagnostics || null, error.message || "Unexpected request failure.");
-      }} finally {{
-        setBusy(false, action);
-      }}
-    }}
-
-    previewButton.addEventListener("click", () => {{
-      runBomAction("preview");
-    }});
-
-    processButton.addEventListener("click", () => {{
-      runBomAction("process");
-    }});
-  </script>
 </body>
 </html>"""
