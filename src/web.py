@@ -791,6 +791,28 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       display: grid;
       gap: 0.85rem;
     }}
+    .hero-top {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }}
+    .link-button {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.5rem 0.8rem;
+      border-radius: 0.5rem;
+      border: 1px solid var(--accent);
+      background: var(--panel-alt);
+      color: var(--accent-strong);
+      font-weight: 600;
+      text-decoration: none;
+      white-space: nowrap;
+    }}
+    .link-button:hover {{
+      background: var(--accent-soft);
+    }}
     .eyebrow {{
       display: inline-flex;
       width: fit-content;
@@ -1045,7 +1067,10 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
 <body>
   <main>
     <section class="panel hero">
-      <span class="eyebrow">Environment: {app_env}</span>
+      <div class="hero-top">
+        <span class="eyebrow">Environment: {app_env}</span>
+        <a class="link-button" href="http://development.qpd.lan:8094/" target="_blank" rel="noopener noreferrer">Bom Formatter</a>
+      </div>
       <h1>Doc Package Intake</h1>
       <p>Upload a customer document package once. The intake flow flattens and mirrors the processed files into both configured roots, then resolves and processes the BOM intake from the same uploaded package.</p>
     </section>
