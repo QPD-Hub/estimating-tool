@@ -48,7 +48,6 @@ class ViewState:
     customer: str = ""
     rfq_number: str = ""
     uploaded_by: str = ""
-    quote_number: str = ""
     intake_notes: str = ""
     message: str = ""
     error: str = ""
@@ -131,14 +130,12 @@ def _handle_upload(
     customer = ""
     rfq_number = ""
     uploaded_by = ""
-    quote_number = ""
     intake_notes = ""
     try:
         form = _parse_form_request(environ)
         customer = form.getfirst("customer", "")
         rfq_number = form.getfirst("rfq_number", "")
         uploaded_by = form.getfirst("uploaded_by", "")
-        quote_number = form.getfirst("quote_number", "")
         intake_notes = form.getfirst("intake_notes", "")
         file_fields = form["documents"] if "documents" in form else []
         if not isinstance(file_fields, list):
@@ -174,7 +171,6 @@ def _handle_upload(
                     customer=result.customer_name,
                     rfq_number=result.rfq_number,
                     uploaded_by=result.uploaded_by,
-                    quote_number=quote_number,
                     intake_notes=result.intake_notes or "",
                     message=message,
                     result=result.document_result,
@@ -192,7 +188,6 @@ def _handle_upload(
                     customer=customer,
                     rfq_number=rfq_number,
                     uploaded_by=uploaded_by,
-                    quote_number=quote_number,
                     intake_notes=intake_notes,
                     error=str(exc),
                     result=exc.document_result,
@@ -211,7 +206,6 @@ def _handle_upload(
                     customer=customer,
                     rfq_number=rfq_number,
                     uploaded_by=uploaded_by,
-                    quote_number=quote_number,
                     intake_notes=intake_notes,
                     error="Unexpected server error while processing the document package.",
                 ),
@@ -1112,10 +1106,6 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
           <label for="uploaded_by">
             Uploaded By
             <input id="uploaded_by" name="uploaded_by" type="text" required value="{html.escape(view_state.uploaded_by)}">
-          </label>
-          <label for="quote_number">
-            Quote Number
-            <input id="quote_number" name="quote_number" type="text" value="{html.escape(view_state.quote_number)}">
           </label>
           <label for="documents">
             Package Files

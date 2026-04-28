@@ -612,7 +612,6 @@ class WebBomIntakeApiTests(unittest.TestCase):
                     "customer": "ACME",
                     "rfq_number": "Q-100",
                     "uploaded_by": "estimator",
-                    "quote_number": "Q-100",
                     "intake_notes": "same workflow",
                 },
                 file_field_name="documents",
