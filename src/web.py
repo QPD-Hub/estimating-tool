@@ -82,6 +82,7 @@ class LookupService:
         }
 
     def list_customers(self, search: str | None) -> list[str]:
+        normalized_search = self._normalize_lookup_value(search)
         return self._query_names(
             """
 SELECT TOP (50) Customer
@@ -92,32 +93,74 @@ WHERE Status = 'Active'
   AND (%s IS NULL OR Customer LIKE '%%' + %s + '%%')
 ORDER BY Customer;
 """,
-            search,
+            (normalized_search, normalized_search),
         )
 
-    def list_contacts(self, search: str | None) -> list[str]:
+    def list_contacts(self, customer: str | None, search: str | None) -> list[str]:
+        normalized_customer = self._normalize_lookup_value(customer)
+        if normalized_customer is None:
+            return []
+        normalized_search = self._normalize_lookup_value(search)
         return self._query_names(
             """
 SELECT TOP (50) Contact_Name
 FROM HILLSBORO.dbo.Contact
 WHERE Contact_Name IS NOT NULL
   AND LTRIM(RTRIM(Contact_Name)) <> ''
+  AND Customer IS NOT NULL
+  AND LTRIM(RTRIM(Customer)) <> ''
+  AND LOWER(LTRIM(RTRIM(Customer))) = LOWER(%s)
   AND (%s IS NULL OR Contact_Name LIKE '%%' + %s + '%%')
+GROUP BY Contact_Name
 ORDER BY Contact_Name;
 """,
-            search,
+            (normalized_customer, normalized_search, normalized_search),
         )
 
-    def _query_names(self, sql: str, search: str | None) -> list[str]:
-        normalized_search = search.strip() if search and search.strip() else None
+    def contact_belongs_to_customer(
+        self,
+        contact_name: str | None,
+        customer: str | None,
+    ) -> bool:
+        normalized_contact_name = self._normalize_lookup_value(contact_name)
+        normalized_customer = self._normalize_lookup_value(customer)
+        if normalized_contact_name is None or normalized_customer is None:
+            return False
         connection = self._connect(**self._connection_kwargs())
         cursor = connection.cursor()
         try:
-            cursor.execute(sql, (normalized_search, normalized_search))
+            cursor.execute(
+                """
+SELECT TOP (1) 1
+FROM HILLSBORO.dbo.Contact
+WHERE Contact_Name IS NOT NULL
+  AND Customer IS NOT NULL
+  AND LOWER(LTRIM(RTRIM(Contact_Name))) = LOWER(%s)
+  AND LOWER(LTRIM(RTRIM(Customer))) = LOWER(%s);
+""",
+                (normalized_contact_name, normalized_customer),
+            )
+            return cursor.fetchone() is not None
+        finally:
+            cursor.close()
+            connection.close()
+
+    def _query_names(self, sql: str, params: tuple[object, ...]) -> list[str]:
+        connection = self._connect(**self._connection_kwargs())
+        cursor = connection.cursor()
+        try:
+            cursor.execute(sql, params)
             return [str(row[0]).strip() for row in cursor.fetchall() if row and str(row[0]).strip()]
         finally:
             cursor.close()
             connection.close()
+
+    @staticmethod
+    def _normalize_lookup_value(value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 def create_app(
@@ -144,6 +187,8 @@ def create_app(
         if path == "/" and method == "GET":
             return _respond_html(start_response, render_page(config, ViewState()))
         if path == "/" and method == "POST":
+            if lookup_service is None:
+                lookup_service = LookupService(sql_config=SqlServerConfig.load())
             if doc_package_intake_service is None:
                 if bom_intake_service is None:
                     bom_intake_service = _build_bom_intake_service()
@@ -156,6 +201,7 @@ def create_app(
                 start_response,
                 config,
                 doc_package_intake_service,
+                lookup_service,
             )
         if path == "/api/dev/bom-intake" and method == "POST":
             if bom_intake_service is None:
@@ -200,6 +246,7 @@ def _handle_upload(
     start_response,
     config,
     service: DocPackageIntakeService,
+    lookup_service: LookupService,
 ):
     customer = ""
     rfq_number = ""
@@ -217,6 +264,17 @@ def _handle_upload(
         contact_name = form.getfirst("contact_name", "")
         quote_due_date = form.getfirst("quote_due_date", "")
         intake_notes = form.getfirst("intake_notes", "")
+        normalized_customer = customer.strip()
+        normalized_contact = contact_name.strip()
+        if normalized_contact and not normalized_customer:
+            raise DocPackageIntakeError("Customer is required when Contact is provided.")
+        if normalized_contact and not lookup_service.contact_belongs_to_customer(
+            contact_name=normalized_contact,
+            customer=normalized_customer,
+        ):
+            raise DocPackageIntakeError(
+                "Selected Contact does not belong to the entered Customer."
+            )
         file_fields = form["documents"] if "documents" in form else []
         if not isinstance(file_fields, list):
             file_fields = [file_fields]
@@ -675,9 +733,10 @@ def _handle_lookup_customers(environ, start_response, lookup_service: LookupServ
 def _handle_lookup_contacts(environ, start_response, lookup_service: LookupService):
     try:
         search = _query_value(environ, "search")
+        customer = _query_value(environ, "customer")
         return _respond_json(
             start_response,
-            {"items": lookup_service.list_contacts(search)},
+            {"items": lookup_service.list_contacts(customer, search)},
             status=HTTPStatus.OK,
         )
     except Exception:
@@ -1249,7 +1308,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
           </label>
           <label for="contact_name">
             Contact
-            <input id="contact_name" name="contact_name" type="text" list="contact_suggestions" value="{html.escape(view_state.contact_name)}">
+            <input id="contact_name" name="contact_name" type="text" list="contact_suggestions" value="{html.escape(view_state.contact_name)}"{" disabled" if not view_state.customer.strip() else ""}>
             <datalist id="contact_suggestions"></datalist>
           </label>
           <label for="quote_due_date">
@@ -1278,6 +1337,12 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
   </main>
   <script>
     (function() {{
+      function renderDatalistOptions(datalist, items) {{
+        datalist.innerHTML = items
+          .map((item) => "<option value=\\"" + String(item).replaceAll("\\"", "&quot;") + "\\"></option>")
+          .join("");
+      }}
+
       function hookLookup(inputId, datalistId, endpoint) {{
         const input = document.getElementById(inputId);
         const datalist = document.getElementById(datalistId);
@@ -1292,15 +1357,69 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             if (!response.ok || requestToken !== token) return;
             const payload = await response.json();
             if (!payload || !Array.isArray(payload.items)) return;
-            datalist.innerHTML = payload.items
-              .map((item) => "<option value=\\"" + String(item).replaceAll("\\"", "&quot;") + "\\"></option>")
-              .join("");
+            renderDatalistOptions(datalist, payload.items);
           }} catch (_err) {{
           }}
         }});
       }}
+
+      function hookCustomerFilteredContactLookup(customerId, contactId, datalistId, endpoint) {{
+        const customerInput = document.getElementById(customerId);
+        const contactInput = document.getElementById(contactId);
+        const datalist = document.getElementById(datalistId);
+        if (!customerInput || !contactInput || !datalist) return;
+        let token = 0;
+
+        function syncContactEnabledState() {{
+          const hasCustomer = customerInput.value.trim().length > 0;
+          contactInput.disabled = !hasCustomer;
+          if (!hasCustomer) {{
+            contactInput.value = "";
+            renderDatalistOptions(datalist, []);
+          }}
+        }}
+
+        async function loadContacts() {{
+          const customer = customerInput.value.trim();
+          if (!customer) {{
+            renderDatalistOptions(datalist, []);
+            return;
+          }}
+          const search = contactInput.value.trim();
+          token += 1;
+          const requestToken = token;
+          try {{
+            const response = await fetch(
+              endpoint +
+              "?customer=" + encodeURIComponent(customer) +
+              "&search=" + encodeURIComponent(search)
+            );
+            if (!response.ok || requestToken !== token) return;
+            const payload = await response.json();
+            if (!payload || !Array.isArray(payload.items)) return;
+            renderDatalistOptions(datalist, payload.items);
+          }} catch (_err) {{
+          }}
+        }}
+
+        customerInput.addEventListener("input", function() {{
+          contactInput.value = "";
+          renderDatalistOptions(datalist, []);
+          syncContactEnabledState();
+          if (contactInput.disabled) return;
+          void loadContacts();
+        }});
+
+        contactInput.addEventListener("input", function() {{
+          if (contactInput.disabled) return;
+          void loadContacts();
+        }});
+
+        syncContactEnabledState();
+      }}
+
       hookLookup("customer", "customer_suggestions", "/api/lookups/customers");
-      hookLookup("contact_name", "contact_suggestions", "/api/lookups/contacts");
+      hookCustomerFilteredContactLookup("customer", "contact_name", "contact_suggestions", "/api/lookups/contacts");
     }})();
   </script>
 </body>

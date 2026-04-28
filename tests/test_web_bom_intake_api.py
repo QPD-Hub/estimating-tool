@@ -610,6 +610,16 @@ class WebBomIntakeApiTests(unittest.TestCase):
 
     def test_root_post_routes_package_to_doc_package_intake_service(self) -> None:
         fake_package_service = FakeDocPackageIntakeService()
+        class FakeLookupService:
+            def list_customers(self, search):
+                return []
+
+            def list_contacts(self, customer, search):
+                return []
+
+            def contact_belongs_to_customer(self, contact_name, customer):
+                return True
+
         with tempfile.TemporaryDirectory() as temp_dir:
             app = create_app(
                 AppConfig(
@@ -620,6 +630,7 @@ class WebBomIntakeApiTests(unittest.TestCase):
                 ),
                 bom_intake_service_override=FakeBomIntakeService(),
                 doc_package_intake_service_override=fake_package_service,
+                lookup_service_override=FakeLookupService(),
             )
 
             status, headers, body = _invoke_multipart(
@@ -656,8 +667,11 @@ class WebBomIntakeApiTests(unittest.TestCase):
                 self.search = search
                 return ["ACME", "ACME WEST"]
 
-            def list_contacts(self, search):
+            def list_contacts(self, customer, search):
                 return []
+
+            def contact_belongs_to_customer(self, contact_name, customer):
+                return True
 
         lookup = FakeLookupService()
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -681,9 +695,43 @@ class WebBomIntakeApiTests(unittest.TestCase):
             def list_customers(self, search):
                 return []
 
-            def list_contacts(self, search):
+            def list_contacts(self, customer, search):
+                self.customer = customer
                 self.search = search
                 return ["Alice Smith"]
+
+            def contact_belongs_to_customer(self, contact_name, customer):
+                return True
+
+        lookup = FakeLookupService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                lookup_service_override=lookup,
+            )
+            status, _headers, body = _invoke_get(app, "/api/lookups/contacts?customer=ACME&search=ali")
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(json.loads(body)["items"], ["Alice Smith"])
+        self.assertEqual(lookup.customer, "ACME")
+        self.assertEqual(lookup.search, "ali")
+
+    def test_contact_lookup_endpoint_returns_empty_without_customer(self) -> None:
+        class FakeLookupService:
+            def list_customers(self, search):
+                return []
+
+            def list_contacts(self, customer, search):
+                self.customer = customer
+                self.search = search
+                return []
+
+            def contact_belongs_to_customer(self, contact_name, customer):
+                return True
 
         lookup = FakeLookupService()
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -698,8 +746,78 @@ class WebBomIntakeApiTests(unittest.TestCase):
             )
             status, _headers, body = _invoke_get(app, "/api/lookups/contacts?search=ali")
         self.assertEqual(status, "200 OK")
-        self.assertEqual(json.loads(body)["items"], ["Alice Smith"])
+        self.assertEqual(json.loads(body)["items"], [])
+        self.assertEqual(lookup.customer, None)
         self.assertEqual(lookup.search, "ali")
+
+    def test_root_page_contact_disabled_until_customer_entered(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                bom_intake_service_override=FakeBomIntakeService(),
+            )
+            status, _headers, body = _invoke_get(app, "/")
+
+        self.assertEqual(status, "200 OK")
+        self.assertIn('id="contact_name"', body)
+        self.assertIn('id="contact_name" name="contact_name" type="text" list="contact_suggestions" value="" disabled', body)
+
+    def test_root_post_rejects_contact_that_does_not_belong_to_customer(self) -> None:
+        fake_package_service = FakeDocPackageIntakeService()
+
+        class FakeLookupService:
+            def list_customers(self, search):
+                return []
+
+            def list_contacts(self, customer, search):
+                return []
+
+            def contact_belongs_to_customer(self, contact_name, customer):
+                self.contact_name = contact_name
+                self.customer = customer
+                return False
+
+        lookup = FakeLookupService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                bom_intake_service_override=FakeBomIntakeService(),
+                doc_package_intake_service_override=fake_package_service,
+                lookup_service_override=lookup,
+            )
+
+            status, headers, body = _invoke_multipart(
+                app,
+                "/",
+                fields={
+                    "customer": "ACME",
+                    "rfq_number": "Q-100",
+                    "uploaded_by": "estimator",
+                    "quoted_by": "buyer1",
+                    "contact_name": "Wrong Contact",
+                    "quote_due_date": "2026-05-01",
+                },
+                file_field_name="documents",
+                filename="bom.xlsx",
+                content=b"fake workbook bytes",
+            )
+
+        self.assertEqual(status, "400 Bad Request")
+        self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
+        self.assertIn("Selected Contact does not belong to the entered Customer.", body)
+        self.assertEqual(lookup.contact_name, "Wrong Contact")
+        self.assertEqual(lookup.customer, "ACME")
+        self.assertEqual(len(fake_package_service.calls), 0)
 
 
 def _invoke_json(app, path: str, payload: dict[str, object]):
