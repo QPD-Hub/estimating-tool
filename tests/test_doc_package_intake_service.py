@@ -30,21 +30,21 @@ class FakeDocumentIntakeService:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def intake_documents(self, customer_name, part_number, uploaded_files):
+    def intake_documents(self, customer_name, rfq_number, uploaded_files):
         self.calls.append(
             {
                 "customer_name": customer_name,
-                "part_number": part_number,
+                "rfq_number": rfq_number,
                 "uploaded_files": list(uploaded_files),
             }
         )
         return DocumentIntakeResult(
             customer_name=customer_name,
-            part_number=part_number,
+            rfq_number=rfq_number,
             sanitized_customer_folder_name="ACME",
-            sanitized_part_folder_name="PART-100",
-            automation_path=Path("/tmp/automation/ACME/PART-100"),
-            working_path=Path("/tmp/work/ACME/PART-100"),
+            sanitized_rfq_folder_name="RFQ-Q-100",
+            automation_path=Path("/tmp/automation/ACME/RFQ-Q-100/package"),
+            working_path=Path("/tmp/work/ACME/RFQ-Q-100/package"),
             uploaded_files_count=len(list(uploaded_files)),
             processed_files=["bom.xlsx", "drawing.pdf"],
             extension_summary={".pdf": 1, ".xlsx": 1},
@@ -95,9 +95,8 @@ class DocPackageIntakeServiceTests(unittest.TestCase):
 
         result = service.intake_package(
             customer_name="ACME",
-            part_number="PART-100",
+            rfq_number="Q-100",
             uploaded_by="estimator",
-            quote_number="Q-100",
             intake_notes="package intake",
             uploaded_files=[
                 UploadedFile(filename="notes.xlsx", content=b"not a bom"),
@@ -108,9 +107,10 @@ class DocPackageIntakeServiceTests(unittest.TestCase):
 
         self.assertEqual(result.selected_bom_file_name, "bom.xlsx")
         self.assertEqual(document_service.calls[0]["customer_name"], "ACME")
-        self.assertEqual(document_service.calls[0]["part_number"], "PART-100")
+        self.assertEqual(document_service.calls[0]["rfq_number"], "Q-100")
         self.assertEqual(bom_service.process_calls[0]["upload_data"]["filename"], "bom.xlsx")
         self.assertEqual(bom_service.process_calls[0]["header_data"]["customer_name"], "ACME")
+        self.assertEqual(bom_service.process_calls[0]["header_data"]["quote_number"], "Q-100")
         self.assertEqual(result.bom_result["Summary"]["BomIntakeId"], 321)
 
     def test_intake_package_requires_bom_candidate_in_uploaded_documents(self) -> None:
@@ -125,7 +125,7 @@ class DocPackageIntakeServiceTests(unittest.TestCase):
         ):
             service.intake_package(
                 customer_name="ACME",
-                part_number="PART-100",
+                rfq_number="Q-100",
                 uploaded_by="estimator",
                 uploaded_files=[UploadedFile(filename="drawing.pdf", content=b"pdf")],
             )

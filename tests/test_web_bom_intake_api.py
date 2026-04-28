@@ -225,19 +225,17 @@ class FakeDocPackageIntakeService:
         self,
         *,
         customer_name,
-        part_number,
+        rfq_number,
         uploaded_by,
         uploaded_files,
-        quote_number=None,
         intake_notes=None,
     ):
         self.calls.append(
             {
                 "customer_name": customer_name,
-                "part_number": part_number,
+                "rfq_number": rfq_number,
                 "uploaded_by": uploaded_by,
                 "uploaded_files": list(uploaded_files),
-                "quote_number": quote_number,
                 "intake_notes": intake_notes,
             }
         )
@@ -246,18 +244,18 @@ class FakeDocPackageIntakeService:
 
         document_result = DocumentIntakeResult(
             customer_name=customer_name,
-            part_number=part_number,
+            rfq_number=rfq_number,
             sanitized_customer_folder_name="ACME",
-            sanitized_part_folder_name="PART-100",
-            automation_path=Path("/tmp/automation/ACME/PART-100"),
-            working_path=Path("/tmp/work/ACME/PART-100"),
+            sanitized_rfq_folder_name="RFQ-Q-100",
+            automation_path=Path("/tmp/automation/ACME/RFQ-Q-100/package"),
+            working_path=Path("/tmp/work/ACME/RFQ-Q-100/package"),
             uploaded_files_count=len(list(uploaded_files)),
             processed_files=["bom.xlsx", "drawing.pdf"],
             extension_summary={".pdf": 1, ".xlsx": 1},
         )
         return DocPackageIntakeResult(
             customer_name=customer_name,
-            part_number=part_number,
+            rfq_number=rfq_number,
             uploaded_by=uploaded_by,
             uploaded_files_count=len(list(uploaded_files)),
             selected_bom_file_name="bom.xlsx",
@@ -276,7 +274,7 @@ class FakeDocPackageIntakeService:
                 },
                 "RootResults": [],
             },
-            quote_number=quote_number,
+            detected_roots=[],
             intake_notes=intake_notes,
         )
 
@@ -322,11 +320,11 @@ class WebBomIntakeApiTests(unittest.TestCase):
         )
         result = DocumentIntakeResult(
             customer_name="ACME",
-            part_number="PART-100",
+            rfq_number="Q-100",
             sanitized_customer_folder_name="ACME",
-            sanitized_part_folder_name="PART-100",
-            automation_path=Path("/tmp/automation/ACME/PART-100"),
-            working_path=Path("/tmp/work/ACME/PART-100"),
+            sanitized_rfq_folder_name="RFQ-Q-100",
+            automation_path=Path("/tmp/automation/ACME/RFQ-Q-100/package"),
+            working_path=Path("/tmp/work/ACME/RFQ-Q-100/package"),
             uploaded_files_count=3,
             processed_files=[
                 "README",
@@ -345,9 +343,9 @@ class WebBomIntakeApiTests(unittest.TestCase):
             config,
             ViewState(
                 customer="ACME",
-                part_number="PART-100",
+                rfq_number="Q-100",
                 uploaded_by="estimator",
-                message="Processed 4 file(s) for ACME / PART-100 into both configured roots.",
+                message="Processed 4 file(s) for ACME / RFQ-Q-100 into both configured roots.",
                 result=result,
             ),
         )
@@ -612,7 +610,7 @@ class WebBomIntakeApiTests(unittest.TestCase):
                 "/",
                 fields={
                     "customer": "ACME",
-                    "part_number": "PART-100",
+                    "rfq_number": "Q-100",
                     "uploaded_by": "estimator",
                     "quote_number": "Q-100",
                     "intake_notes": "same workflow",

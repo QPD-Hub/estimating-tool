@@ -46,7 +46,7 @@ BOM_UPLOAD_ALLOWED_SUFFIXES = (".xlsx", ".xls", ".zip")
 @dataclass(frozen=True)
 class ViewState:
     customer: str = ""
-    part_number: str = ""
+    rfq_number: str = ""
     uploaded_by: str = ""
     quote_number: str = ""
     intake_notes: str = ""
@@ -129,14 +129,14 @@ def _handle_upload(
     service: DocPackageIntakeService,
 ):
     customer = ""
-    part_number = ""
+    rfq_number = ""
     uploaded_by = ""
     quote_number = ""
     intake_notes = ""
     try:
         form = _parse_form_request(environ)
         customer = form.getfirst("customer", "")
-        part_number = form.getfirst("part_number", "")
+        rfq_number = form.getfirst("rfq_number", "")
         uploaded_by = form.getfirst("uploaded_by", "")
         quote_number = form.getfirst("quote_number", "")
         intake_notes = form.getfirst("intake_notes", "")
@@ -157,15 +157,14 @@ def _handle_upload(
 
         result = service.intake_package(
             customer_name=customer,
-            part_number=part_number,
+            rfq_number=rfq_number,
             uploaded_by=uploaded_by,
-            quote_number=quote_number,
             intake_notes=intake_notes,
             uploaded_files=uploaded_files,
         )
         message = (
             f"Processed {len(result.document_result.processed_files)} file(s) and "
-            f"completed BOM intake for {result.customer_name} / {result.part_number}."
+            f"completed BOM intake for {result.customer_name} / RFQ-{result.rfq_number}."
         )
         return _respond_html(
             start_response,
@@ -173,9 +172,9 @@ def _handle_upload(
                 config,
                 ViewState(
                     customer=result.customer_name,
-                    part_number=result.part_number,
+                    rfq_number=result.rfq_number,
                     uploaded_by=result.uploaded_by,
-                    quote_number=result.quote_number or "",
+                    quote_number=quote_number,
                     intake_notes=result.intake_notes or "",
                     message=message,
                     result=result.document_result,
@@ -191,7 +190,7 @@ def _handle_upload(
                 config,
                 ViewState(
                     customer=customer,
-                    part_number=part_number,
+                    rfq_number=rfq_number,
                     uploaded_by=uploaded_by,
                     quote_number=quote_number,
                     intake_notes=intake_notes,
@@ -210,7 +209,7 @@ def _handle_upload(
                 config,
                 ViewState(
                     customer=customer,
-                    part_number=part_number,
+                    rfq_number=rfq_number,
                     uploaded_by=uploaded_by,
                     quote_number=quote_number,
                     intake_notes=intake_notes,
@@ -625,9 +624,9 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             "<h4>Processed Document Overview</h4>"
             "<dl class=\"summary-grid\">"
             f"<div><dt>Customer</dt><dd>{html.escape(result.customer_name)}</dd></div>"
-            f"<div><dt>Part Number</dt><dd>{html.escape(result.part_number)}</dd></div>"
+            f"<div><dt>RFQ Number</dt><dd>{html.escape(result.rfq_number)}</dd></div>"
             f"<div><dt>Customer folder</dt><dd>{html.escape(result.sanitized_customer_folder_name)}</dd></div>"
-            f"<div><dt>Part folder</dt><dd>{html.escape(result.sanitized_part_folder_name)}</dd></div>"
+            f"<div><dt>RFQ folder</dt><dd>{html.escape(result.sanitized_rfq_folder_name)}</dd></div>"
             f"<div><dt>Uploaded files</dt><dd>{result.uploaded_files_count}</dd></div>"
             f"<div><dt>Processed files</dt><dd>{len(result.processed_files)}</dd></div>"
             f"<div><dt>Automation destination</dt><dd>{html.escape(str(result.automation_path))}</dd></div>"
@@ -682,6 +681,23 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             f"<div><dt>FinalIntakeStatus</dt><dd>{html.escape(str(summary.get('finalIntakeStatus') or ''))}</dd></div>"
             "</dl>"
             "</div>"
+            + (
+                "<div class=\"overview-card\">"
+                "<h4>Detected Top-Level Parts</h4>"
+                "<ul class=\"count-list\">"
+                + "".join(
+                    "<li>"
+                    f"<code>{html.escape(str(root.get('part_number') or ''))}</code> "
+                    f"(Rev: {html.escape(str(root.get('revision') or ''))}, "
+                    f"Decision: {html.escape(str(root.get('decisionStatus') or ''))})"
+                    "</li>"
+                    for root in view_state.package_result.detected_roots
+                )
+                + "</ul>"
+                "</div>"
+                if view_state.package_result.detected_roots
+                else ""
+            )
             + (
                 "<div class=\"overview-card\">"
                 "<h4>BOM Root Results</h4>"
@@ -1089,9 +1105,9 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             Customer
             <input id="customer" name="customer" type="text" required value="{html.escape(view_state.customer)}">
           </label>
-          <label for="part_number">
-            Part Number
-            <input id="part_number" name="part_number" type="text" required value="{html.escape(view_state.part_number)}">
+          <label for="rfq_number">
+            RFQ Number
+            <input id="rfq_number" name="rfq_number" type="text" required value="{html.escape(view_state.rfq_number)}">
           </label>
           <label for="uploaded_by">
             Uploaded By

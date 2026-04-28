@@ -35,7 +35,7 @@ class DocumentIntakeServiceTests(unittest.TestCase):
 
             result = service.intake_documents(
                 customer_name="ACME / West",
-                part_number="PART:100",
+                rfq_number="100:01",
                 uploaded_files=[
                     UploadedFile(filename="drawing.pdf", content=b"pdf"),
                     UploadedFile(
@@ -52,7 +52,7 @@ class DocumentIntakeServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(result.sanitized_customer_folder_name, "ACME West")
-            self.assertEqual(result.sanitized_part_folder_name, "PART 100")
+            self.assertEqual(result.sanitized_rfq_folder_name, "RFQ-100 01")
             self.assertEqual(result.uploaded_files_count, 2)
             self.assertEqual(
                 result.processed_files,
@@ -73,8 +73,8 @@ class DocumentIntakeServiceTests(unittest.TestCase):
     def test_intake_documents_resolves_collisions_once_for_both_roots(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            automation_path = temp_path / "automation" / "ACME" / "PART-100"
-            working_path = temp_path / "work" / "ACME" / "PART-100"
+            automation_path = temp_path / "automation" / "ACME" / "RFQ-100" / "package"
+            working_path = temp_path / "work" / "ACME" / "RFQ-100" / "package"
             automation_path.mkdir(parents=True)
             working_path.mkdir(parents=True)
             (automation_path / "drawing.pdf").write_bytes(b"existing-automation")
@@ -87,7 +87,7 @@ class DocumentIntakeServiceTests(unittest.TestCase):
 
             result = service.intake_documents(
                 customer_name="ACME",
-                part_number="PART-100",
+                rfq_number="100",
                 uploaded_files=[
                     UploadedFile(filename="drawing.pdf", content=b"new"),
                 ],
@@ -103,17 +103,17 @@ class DocumentIntakeServiceTests(unittest.TestCase):
                 b"new",
             )
 
-    def test_intake_documents_requires_part_number(self) -> None:
+    def test_intake_documents_requires_rfq_number(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             service = DocumentIntakeService(
                 automation_drop_root=Path(temp_dir) / "automation",
                 work_root=Path(temp_dir) / "work",
             )
 
-            with self.assertRaisesRegex(DocumentIntakeError, "Part Number is required."):
+            with self.assertRaisesRegex(DocumentIntakeError, "RFQ Number is required."):
                 service.intake_documents(
                     customer_name="ACME",
-                    part_number="",
+                    rfq_number="",
                     uploaded_files=[UploadedFile(filename="drawing.pdf", content=b"pdf")],
                 )
 

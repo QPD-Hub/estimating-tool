@@ -34,14 +34,14 @@ class DocPackageIntakeError(Exception):
 @dataclass(frozen=True)
 class DocPackageIntakeResult:
     customer_name: str
-    part_number: str
+    rfq_number: str
     uploaded_by: str
     uploaded_files_count: int
     selected_bom_file_name: str
     document_result: DocumentIntakeResult
     bom_preview: BomIntakePreview
     bom_result: dict[str, object]
-    quote_number: str | None = None
+    detected_roots: list[dict[str, str | None]]
     intake_notes: str | None = None
 
 
@@ -58,10 +58,9 @@ class DocPackageIntakeService:
         self,
         *,
         customer_name: str,
-        part_number: str,
+        rfq_number: str,
         uploaded_by: str,
         uploaded_files: list[UploadedFile],
-        quote_number: str | None = None,
         intake_notes: str | None = None,
     ) -> DocPackageIntakeResult:
         normalized_uploaded_by = uploaded_by.strip()
@@ -74,7 +73,7 @@ class DocPackageIntakeService:
         bom_upload, bom_preview = self._select_bom_upload(
             customer_name=customer_name,
             uploaded_by=normalized_uploaded_by,
-            quote_number=quote_number,
+            rfq_number=rfq_number,
             intake_notes=intake_notes,
             uploaded_files=uploaded_files,
         )
@@ -82,7 +81,7 @@ class DocPackageIntakeService:
         try:
             document_result = self._document_intake_service.intake_documents(
                 customer_name=customer_name,
-                part_number=part_number,
+                rfq_number=rfq_number,
                 uploaded_files=uploaded_files,
             )
         except DocumentIntakeError as exc:
@@ -93,7 +92,7 @@ class DocPackageIntakeService:
                 header_data=self._build_bom_header(
                     customer_name=customer_name,
                     uploaded_by=normalized_uploaded_by,
-                    quote_number=quote_number,
+                    rfq_number=rfq_number,
                     intake_notes=intake_notes,
                     bom_file_name=bom_upload.filename,
                 ),
@@ -108,16 +107,17 @@ class DocPackageIntakeService:
                 document_result=document_result,
             ) from exc
 
+        detected_roots = _extract_detected_roots(bom_result)
         return DocPackageIntakeResult(
             customer_name=customer_name.strip(),
-            part_number=part_number.strip(),
+            rfq_number=rfq_number.strip(),
             uploaded_by=normalized_uploaded_by,
             uploaded_files_count=len(uploaded_files),
             selected_bom_file_name=bom_upload.filename,
             document_result=document_result,
             bom_preview=bom_preview,
             bom_result=bom_result,
-            quote_number=quote_number.strip() if quote_number and quote_number.strip() else None,
+            detected_roots=detected_roots,
             intake_notes=intake_notes.strip() if intake_notes and intake_notes.strip() else None,
         )
 
@@ -127,7 +127,7 @@ class DocPackageIntakeService:
         customer_name: str,
         uploaded_by: str,
         uploaded_files: list[UploadedFile],
-        quote_number: str | None = None,
+        rfq_number: str,
         intake_notes: str | None = None,
     ) -> BomIntakePreview:
         normalized_uploaded_by = uploaded_by.strip()
@@ -139,7 +139,7 @@ class DocPackageIntakeService:
         _, preview = self._select_bom_upload(
             customer_name=customer_name,
             uploaded_by=normalized_uploaded_by,
-            quote_number=quote_number,
+            rfq_number=rfq_number,
             intake_notes=intake_notes,
             uploaded_files=uploaded_files,
         )
@@ -150,7 +150,7 @@ class DocPackageIntakeService:
         *,
         customer_name: str,
         uploaded_by: str,
-        quote_number: str | None,
+        rfq_number: str,
         intake_notes: str | None,
         uploaded_files: list[UploadedFile],
     ) -> tuple[UploadedFile, BomIntakePreview]:
@@ -178,7 +178,7 @@ class DocPackageIntakeService:
                     header_data=self._build_bom_header(
                         customer_name=customer_name,
                         uploaded_by=uploaded_by,
-                        quote_number=quote_number,
+                        rfq_number=rfq_number,
                         intake_notes=intake_notes,
                         bom_file_name=bom_candidate.filename,
                     ),
@@ -206,17 +206,42 @@ class DocPackageIntakeService:
         *,
         customer_name: str,
         uploaded_by: str,
-        quote_number: str | None,
+        rfq_number: str,
         intake_notes: str | None,
         bom_file_name: str,
     ) -> dict[str, object]:
         return {
             "customer_name": customer_name.strip(),
             "uploaded_by": uploaded_by.strip(),
-            "quote_number": quote_number.strip() if quote_number and quote_number.strip() else None,
+            "quote_number": rfq_number.strip() if rfq_number and rfq_number.strip() else None,
             "intake_notes": intake_notes.strip() if intake_notes and intake_notes.strip() else None,
             "source_file_name": bom_file_name,
         }
+
+
+def _extract_detected_roots(bom_result: dict[str, object]) -> list[dict[str, str | None]]:
+    root_results = bom_result.get("RootResults")
+    if not isinstance(root_results, list):
+        return []
+    detected_roots: list[dict[str, str | None]] = []
+    for root in root_results:
+        if not isinstance(root, dict):
+            continue
+        detected_roots.append(
+            {
+                "part_number": _to_optional_text(root.get("Level0PartNumber")),
+                "revision": _to_optional_text(root.get("Revision")),
+                "decisionStatus": _to_optional_text(root.get("DecisionStatus")),
+            }
+        )
+    return detected_roots
+
+
+def _to_optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _score_bom_upload_candidate(filename: str) -> int:

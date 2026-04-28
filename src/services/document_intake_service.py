@@ -32,9 +32,9 @@ class UploadedFile:
 @dataclass(frozen=True)
 class DocumentIntakeResult:
     customer_name: str
-    part_number: str
+    rfq_number: str
     sanitized_customer_folder_name: str
-    sanitized_part_folder_name: str
+    sanitized_rfq_folder_name: str
     automation_path: Path
     working_path: Path
     uploaded_files_count: int
@@ -50,16 +50,16 @@ class DocumentIntakeService:
     def intake_documents(
         self,
         customer_name: str,
-        part_number: str,
+        rfq_number: str,
         uploaded_files: Iterable[UploadedFile],
     ) -> DocumentIntakeResult:
         normalized_customer_name = customer_name.strip()
         if not normalized_customer_name:
             raise DocumentIntakeError("Customer is required.")
 
-        normalized_part_number = part_number.strip()
-        if not normalized_part_number:
-            raise DocumentIntakeError("Part Number is required.")
+        normalized_rfq_number = rfq_number.strip()
+        if not normalized_rfq_number:
+            raise DocumentIntakeError("RFQ Number is required.")
 
         files = list(uploaded_files)
         if not files:
@@ -69,8 +69,8 @@ class DocumentIntakeService:
             sanitized_customer_folder_name = sanitize_customer_folder_name(
                 normalized_customer_name
             )
-            sanitized_part_folder_name = sanitize_part_folder_name(
-                normalized_part_number
+            sanitized_rfq_folder_name = sanitize_part_folder_name(
+                f"RFQ-{normalized_rfq_number}"
             )
             processed_files = self._build_processed_files(files)
         except PathValidationError as exc:
@@ -79,12 +79,14 @@ class DocumentIntakeService:
         automation_path = (
             self._automation_drop_root
             / sanitized_customer_folder_name
-            / sanitized_part_folder_name
+            / sanitized_rfq_folder_name
+            / "package"
         )
         working_path = (
             self._work_root
             / sanitized_customer_folder_name
-            / sanitized_part_folder_name
+            / sanitized_rfq_folder_name
+            / "package"
         )
 
         written_paths: list[Path] = []
@@ -109,9 +111,9 @@ class DocumentIntakeService:
                 )
         except Exception as exc:
             logger.exception(
-                "Document intake processing failed for customer '%s' part '%s'.",
+                "Document intake processing failed for customer '%s' RFQ '%s'.",
                 normalized_customer_name,
-                normalized_part_number,
+                normalized_rfq_number,
             )
             self._cleanup_written_files(written_paths)
             self._cleanup_created_directories(created_dirs)
@@ -125,9 +127,9 @@ class DocumentIntakeService:
         )
         return DocumentIntakeResult(
             customer_name=normalized_customer_name,
-            part_number=normalized_part_number,
+            rfq_number=normalized_rfq_number,
             sanitized_customer_folder_name=sanitized_customer_folder_name,
-            sanitized_part_folder_name=sanitized_part_folder_name,
+            sanitized_rfq_folder_name=sanitized_rfq_folder_name,
             automation_path=automation_path,
             working_path=working_path,
             uploaded_files_count=len(files),
