@@ -1086,7 +1086,6 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
                 <th>Part Number</th>
                 <th>Description</th>
                 <th>Revision</th>
-                <th>Drawing / Item</th>
                 <th>Quote Qty Breaks</th>
               </tr>
             </thead>
@@ -1396,7 +1395,8 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       z-index: 50;
     }}
     .modal-panel {{
-      width: min(64rem, 96vw);
+      width: min(82vw, 90rem);
+      max-width: 96vw;
       max-height: 82vh;
       overflow: auto;
       background: var(--panel);
@@ -1406,12 +1406,14 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       padding: 1rem;
     }}
     .qty-editor {{
-      display: grid;
-      gap: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      flex-wrap: wrap;
     }}
     .qty-list {{
       display: flex;
-      gap: 0.35rem;
+      gap: 0.3rem;
       flex-wrap: wrap;
       margin: 0;
       padding: 0;
@@ -1420,20 +1422,36 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
     .qty-list li {{
       display: inline-flex;
       align-items: center;
-      gap: 0.3rem;
+      gap: 0.2rem;
       border: 1px solid var(--border);
-      border-radius: 999px;
-      padding: 0.25rem 0.55rem;
+      border-radius: 0.35rem;
+      padding: 0.2rem;
       background: white;
     }}
+    .qty-list li input {{
+      width: 4.25rem;
+      padding: 0.2rem 0.35rem;
+      min-height: 1.9rem;
+    }}
+    .qty-list li button {{
+      min-height: 1.9rem;
+      min-width: 1.9rem;
+      padding: 0.1rem 0.35rem;
+      line-height: 1;
+    }}
     .qty-add-row {{
-      display: flex;
-      gap: 0.4rem;
+      display: inline-flex;
+      gap: 0.3rem;
       align-items: center;
     }}
     .qty-add-row input {{
-      width: 7rem;
-      padding: 0.45rem 0.5rem;
+      width: 4.5rem;
+      padding: 0.25rem 0.35rem;
+      min-height: 1.9rem;
+    }}
+    .qty-add-row button {{
+      min-height: 1.9rem;
+      padding: 0.2rem 0.5rem;
     }}
     .section-note {{
       margin: 0 0 0.75rem;
@@ -1682,7 +1700,6 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             "<td><code>" + row.partNumber + "</code></td>" +
             "<td>" + row.description + "</td>" +
             "<td>" + row.revision + "</td>" +
-            "<td>" + row.drawingOrItem + "</td>" +
             "<td>" +
               "<div class=\\"qty-editor\\">" +
                 "<ul class=\\"qty-list\\" id=\\"qty-list-" + index + "\\"></ul>" +
@@ -1699,7 +1716,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             row.qtys.forEach((qty, qtyIndex) => {{
               const li = document.createElement("li");
               li.innerHTML =
-                "<span>" + qty + "</span>" +
+                "<input type=\\"number\\" min=\\"1\\" step=\\"1\\" value=\\"" + qty + "\\" data-idx=\\"" + index + "\\" data-qty-idx=\\"" + qtyIndex + "\\" data-act=\\"edit-qty\\" " + (row.includeInQuote ? "" : "disabled") + ">" +
                 "<button type=\\"button\\" class=\\"ghost\\" data-idx=\\"" + index + "\\" data-qty-idx=\\"" + qtyIndex + "\\" data-act=\\"remove-qty\\" " + (row.includeInQuote ? "" : "disabled") + ">x</button>";
               qtyListEl.appendChild(li);
             }});
@@ -1746,7 +1763,31 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
         rowsEl.addEventListener("change", function(event) {{
           const target = event.target;
           if (!(target instanceof HTMLElement)) return;
-          if (target.getAttribute("data-act") !== "toggle-include") return;
+          const action = target.getAttribute("data-act");
+          if (!action) return;
+          if (action === "edit-qty") {{
+            if (!(target instanceof HTMLInputElement)) return;
+            const idx = Number(target.getAttribute("data-idx"));
+            const qtyIdx = Number(target.getAttribute("data-qty-idx"));
+            const row = quotePrepRows[idx];
+            if (!row) return;
+            const parsed = parseQty(target.value.trim());
+            if (parsed === null) {{
+              showQuotePrepError("Qty breaks must be positive whole numbers.");
+              renderQuotePrepRows();
+              return;
+            }}
+            const hasDuplicate = row.qtys.some((qty, existingIdx) => existingIdx !== qtyIdx && qty === parsed);
+            if (hasDuplicate) {{
+              showQuotePrepError("Qty breaks cannot contain duplicate values.");
+              renderQuotePrepRows();
+              return;
+            }}
+            row.qtys[qtyIdx] = parsed;
+            showQuotePrepError("");
+            return;
+          }}
+          if (action !== "toggle-include") return;
           const idx = Number(target.getAttribute("data-idx"));
           const row = quotePrepRows[idx];
           if (!row || !(target instanceof HTMLInputElement)) return;
