@@ -27,6 +27,9 @@ class BomPayloadBuildInput:
     source_file_name: str
     source_file_path: str | None = None
     quote_number: str | None = None
+    quoted_by: str | None = None
+    contact_name: str | None = None
+    quote_due_date: str | None = None
     source_sheet_name: str | None = None
     source_type: str | None = None
     parser_version: str | None = None
@@ -44,6 +47,9 @@ class BomPayloadBuilder:
             metadata=BomIntakeMetadata(
                 customer_name=metadata.customer_name,
                 quote_number=metadata.quote_number,
+                quoted_by=metadata.quoted_by,
+                contact_name=metadata.contact_name,
+                quote_due_date=metadata.quote_due_date,
                 source_file_name=metadata.source_file_name,
                 source_file_path=metadata.source_file_path,
                 source_sheet_name=metadata.source_sheet_name,

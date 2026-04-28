@@ -288,6 +288,34 @@ class FakeDocPackageIntakeService:
         )
 
 
+class FakeQuotePrepService:
+    def __init__(self) -> None:
+        self.get_calls: list[int] = []
+        self.save_calls: list[dict[str, object]] = []
+
+    def get_quote_prep_candidates(self, bom_intake_id: int):
+        self.get_calls.append(bom_intake_id)
+        return [
+            {
+                "bomRootId": 123,
+                "includeInQuote": True,
+                "partNumber": "ASM-1000",
+                "description": "Top Assembly",
+                "revision": "A",
+                "drawingOrItem": "DRW-100",
+                "quoteQtyBreaks": "1,5,10",
+            }
+        ]
+
+    def save_quote_prep(self, bom_intake_id: int, items: list[dict[str, object]]) -> None:
+        self.save_calls.append(
+            {
+                "bom_intake_id": bom_intake_id,
+                "items": items,
+            }
+        )
+
+
 def _request_payload() -> dict[str, object]:
     return {
         "header": {
@@ -362,6 +390,7 @@ class WebBomIntakeApiTests(unittest.TestCase):
         self.assertIn("Processed Document Overview", page)
         self.assertIn("Processed file counts grouped by lowercase extension.", page)
         self.assertIn("Processed Filenames", page)
+        self.assertIn("Show all filenames", page)
         self.assertIn("<span>.pdf</span><strong>2</strong>", page)
         self.assertIn("<span>.xlsx</span><strong>1</strong>", page)
         self.assertIn("<span>[no extension]</span><strong>1</strong>", page)
@@ -660,6 +689,67 @@ class WebBomIntakeApiTests(unittest.TestCase):
         self.assertIn("Doc Package Intake Complete", body)
         self.assertIn("BOM Intake Overview", body)
         self.assertIn("bom.xlsx", body)
+        self.assertIn("Create JobBoss Quote", body)
+        self.assertIn('id="open-quote-prep-modal"', body)
+
+    def test_quote_prep_candidates_endpoint_returns_items(self) -> None:
+        quote_prep_service = FakeQuotePrepService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                quote_prep_service_override=quote_prep_service,
+            )
+            status, headers, body = _invoke_get(app, "/api/quote-prep/candidates?bom_intake_id=987")
+
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        payload = json.loads(body)
+        self.assertEqual(payload["bomIntakeId"], 987)
+        self.assertEqual(payload["items"][0]["bomRootId"], 123)
+        self.assertEqual(quote_prep_service.get_calls, [987])
+
+    def test_quote_prep_save_endpoint_posts_items(self) -> None:
+        quote_prep_service = FakeQuotePrepService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                quote_prep_service_override=quote_prep_service,
+            )
+            status, headers, body = _invoke_json(
+                app,
+                "/api/quote-prep/save",
+                {
+                    "bomIntakeId": 987,
+                    "items": [
+                        {
+                            "bomRootId": 123,
+                            "includeInQuote": True,
+                            "quoteQtyBreaks": "1,5,10",
+                        },
+                        {
+                            "bomRootId": 124,
+                            "includeInQuote": False,
+                            "quoteQtyBreaks": "",
+                        },
+                    ],
+                },
+            )
+
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        self.assertEqual(json.loads(body), {"saved": True})
+        self.assertEqual(quote_prep_service.save_calls[0]["bom_intake_id"], 987)
+        self.assertEqual(len(quote_prep_service.save_calls[0]["items"]), 2)
 
     def test_customer_lookup_endpoint_returns_items(self) -> None:
         class FakeLookupService:

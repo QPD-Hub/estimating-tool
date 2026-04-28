@@ -382,6 +382,9 @@ class BomUploadPipelineTests(unittest.TestCase):
                 header_data={
                     "customer_name": "ACME",
                     "uploaded_by": "estimator",
+                    "quoted_by": "buyer1",
+                    "contact_name": "Alice",
+                    "quote_due_date": "2026-05-01",
                     "source_file_name": workbook_path.name,
                 },
                 upload_data={
@@ -397,6 +400,9 @@ class BomUploadPipelineTests(unittest.TestCase):
         self.assertEqual(result["Payload"], preview)
         self.assertEqual(preview["createProc"]["params"]["SourceSheetName"], "BOM")
         self.assertEqual(preview["createProc"]["params"]["SourceType"], "spreadsheet_upload")
+        self.assertEqual(preview["createProc"]["params"]["QuotedBy"], "buyer1")
+        self.assertEqual(preview["createProc"]["params"]["ContactName"], "Alice")
+        self.assertEqual(preview["createProc"]["params"]["QuoteDueDate"], "2026-05-01")
         self.assertEqual(preview["processStandardizedProc"]["params"]["BomIntakeId"], None)
         self.assertEqual(db_service.calls, [])
 

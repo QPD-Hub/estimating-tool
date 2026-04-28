@@ -34,6 +34,11 @@ from src.services.doc_package_intake_service import (
     DocPackageIntakeResult,
     DocPackageIntakeService,
 )
+from src.services.quote_prep_service import (
+    QuotePrepDbError,
+    QuotePrepRequestError,
+    QuotePrepService,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -168,6 +173,7 @@ def create_app(
     bom_intake_service_override: BomIntakeService | None = None,
     doc_package_intake_service_override: DocPackageIntakeService | None = None,
     lookup_service_override: LookupService | None = None,
+    quote_prep_service_override: QuotePrepService | None = None,
 ) -> Callable:
     document_service = DocumentIntakeService(
         automation_drop_root=config.automation_drop_root,
@@ -178,9 +184,10 @@ def create_app(
         doc_package_intake_service_override
     )
     lookup_service: LookupService | None = lookup_service_override
+    quote_prep_service: QuotePrepService | None = quote_prep_service_override
 
     def app(environ, start_response):
-        nonlocal bom_intake_service, doc_package_intake_service, lookup_service
+        nonlocal bom_intake_service, doc_package_intake_service, lookup_service, quote_prep_service
         method = environ.get("REQUEST_METHOD", "GET").upper()
         path = environ.get("PATH_INFO", "/")
 
@@ -231,6 +238,14 @@ def create_app(
             if lookup_service is None:
                 lookup_service = LookupService(sql_config=SqlServerConfig.load())
             return _handle_lookup_contacts(environ, start_response, lookup_service)
+        if path == "/api/quote-prep/candidates" and method == "GET":
+            if quote_prep_service is None:
+                quote_prep_service = QuotePrepService(sql_config=SqlServerConfig.load())
+            return _handle_quote_prep_candidates(environ, start_response, quote_prep_service)
+        if path == "/api/quote-prep/save" and method == "POST":
+            if quote_prep_service is None:
+                quote_prep_service = QuotePrepService(sql_config=SqlServerConfig.load())
+            return _handle_quote_prep_save(environ, start_response, quote_prep_service)
 
         start_response(
             f"{HTTPStatus.NOT_FOUND.value} {HTTPStatus.NOT_FOUND.phrase}",
@@ -748,6 +763,80 @@ def _handle_lookup_contacts(environ, start_response, lookup_service: LookupServi
         )
 
 
+def _handle_quote_prep_candidates(
+    environ,
+    start_response,
+    quote_prep_service: QuotePrepService,
+):
+    try:
+        bom_intake_id = _required_positive_int_query_value(environ, "bom_intake_id")
+        return _respond_json(
+            start_response,
+            {
+                "bomIntakeId": bom_intake_id,
+                "items": quote_prep_service.get_quote_prep_candidates(bom_intake_id),
+            },
+            status=HTTPStatus.OK,
+        )
+    except (ValueError, QuotePrepRequestError) as exc:
+        return _respond_json(
+            start_response,
+            {"error": str(exc)},
+            status=HTTPStatus.BAD_REQUEST,
+        )
+    except QuotePrepDbError as exc:
+        logger.exception("Quote prep candidate load failed.")
+        return _respond_json(
+            start_response,
+            {"error": str(exc)},
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+    except Exception:
+        logger.exception("Unexpected quote prep candidate error.")
+        return _respond_json(
+            start_response,
+            {"error": "Unexpected server error while loading quote prep candidates."},
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+
+
+def _handle_quote_prep_save(
+    environ,
+    start_response,
+    quote_prep_service: QuotePrepService,
+):
+    try:
+        request_body = _parse_json_request(environ)
+        bom_intake_id_raw = request_body.get("bomIntakeId")
+        items = request_body.get("items")
+        if not isinstance(bom_intake_id_raw, int) or bom_intake_id_raw <= 0:
+            raise ValueError("bomIntakeId must be a positive integer.")
+        if not isinstance(items, list):
+            raise ValueError("items must be an array.")
+        quote_prep_service.save_quote_prep(bom_intake_id_raw, items)
+        return _respond_json(start_response, {"saved": True}, status=HTTPStatus.OK)
+    except (ValueError, QuotePrepRequestError) as exc:
+        return _respond_json(
+            start_response,
+            {"error": str(exc)},
+            status=HTTPStatus.BAD_REQUEST,
+        )
+    except QuotePrepDbError as exc:
+        logger.exception("Quote prep save failed.")
+        return _respond_json(
+            start_response,
+            {"error": str(exc)},
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+    except Exception:
+        logger.exception("Unexpected quote prep save error.")
+        return _respond_json(
+            start_response,
+            {"error": "Unexpected server error while saving quote prep decisions."},
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+
+
 def _query_value(environ, name: str) -> str | None:
     query_values = parse_qs(environ.get("QUERY_STRING", ""), keep_blank_values=True)
     values = query_values.get(name)
@@ -755,6 +844,18 @@ def _query_value(environ, name: str) -> str | None:
         return None
     value = values[-1].strip()
     return value or None
+
+
+def _required_positive_int_query_value(environ, name: str) -> int:
+    value = _query_value(environ, name)
+    if value is None:
+        raise ValueError(f"{name} is required.")
+    if not value.isdigit():
+        raise ValueError(f"{name} must be a positive integer.")
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer.")
+    return parsed
 
 
 def _form_value(form: cgi.FieldStorage, *names: str) -> str:
@@ -790,14 +891,31 @@ def _group_processed_files_by_extension(
 def render_page(config: AppConfig, view_state: ViewState) -> str:
     app_env = html.escape(config.app_env)
     processed_document_overview_html = ""
+    quote_prep_button_html = ""
+    quote_prep_modal_html = ""
     if view_state.result:
         result = view_state.result
         processed_files_by_extension = _group_processed_files_by_extension(
             result.extension_summary
         )
-        processed_files_html = "".join(
+        visible_filenames = result.processed_files[:5]
+        hidden_filenames = result.processed_files[5:]
+        processed_files_visible_html = "".join(
             f"<li><code>{html.escape(filename)}</code></li>"
-            for filename in result.processed_files
+            for filename in visible_filenames
+        )
+        processed_files_hidden_html = "".join(
+            f"<li><code>{html.escape(filename)}</code></li>"
+            for filename in hidden_filenames
+        )
+        processed_files_toggle_html = (
+            "<div class=\"actions\">"
+            "<button type=\"button\" class=\"secondary\" id=\"toggle-processed-filenames\">Show all filenames</button>"
+            "</div>"
+            "<ul class=\"count-list hidden\" id=\"processed-filenames-hidden\">"
+            f"{processed_files_hidden_html}</ul>"
+            if hidden_filenames
+            else ""
         )
         processed_files_by_extension_html = "".join(
             "<li>"
@@ -825,7 +943,8 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             "<h4>Processed Filenames</h4>"
             "<p class=\"section-note\">Final flattened filenames written to both configured roots for this request.</p>"
             "<ul class=\"count-list\">"
-            f"{processed_files_html}</ul>"
+            f"{processed_files_visible_html}</ul>"
+            f"{processed_files_toggle_html}"
             "</div>"
             "<div class=\"overview-card\">"
             "<h4>Extension Counts</h4>"
@@ -840,6 +959,13 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
     if view_state.package_result:
         bom_result = _serialize_bom_intake_result(view_state.package_result.bom_result)
         summary = bom_result["summary"]
+        bom_intake_id = summary.get("bomIntakeId")
+        if isinstance(bom_intake_id, int) and bom_intake_id > 0:
+            quote_prep_button_html = (
+                f"<button type=\"button\" class=\"secondary\" id=\"open-quote-prep-modal\" data-bom-intake-id=\"{bom_intake_id}\">"
+                "Create JobBoss Quote"
+                "</button>"
+            )
         root_results = bom_result["rootResults"]
         root_results_html = "".join(
             "<tr>"
@@ -942,6 +1068,38 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             f"{processed_document_overview_html}"
             "</section>"
         )
+
+    quote_prep_modal_html = """
+    <div class="modal-overlay hidden" id="quote-prep-overlay" role="dialog" aria-modal="true" aria-labelledby="quote-prep-title">
+      <section class="modal-panel">
+        <div class="section-header">
+          <h3 id="quote-prep-title">Quote Prep</h3>
+          <button type="button" class="ghost" id="close-quote-prep-modal">Close</button>
+        </div>
+        <p class="section-note">Choose which level-0 parts to include and define quote quantity breaks.</p>
+        <div id="quote-prep-error" class="callout error hidden"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Include</th>
+                <th>Part Number</th>
+                <th>Description</th>
+                <th>Revision</th>
+                <th>Drawing / Item</th>
+                <th>Quote Qty Breaks</th>
+              </tr>
+            </thead>
+            <tbody id="quote-prep-rows"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button type="button" id="save-quote-prep">Save Quote Prep</button>
+          <span class="status-line" id="quote-prep-status"></span>
+        </div>
+      </section>
+    </div>
+    """
 
     return f"""<!doctype html>
 <html lang="en">
@@ -1227,6 +1385,56 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
     .overview-card h4 {{
       margin: 0 0 0.35rem;
     }}
+    .modal-overlay {{
+      position: fixed;
+      inset: 0;
+      background: rgba(18, 24, 27, 0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      z-index: 50;
+    }}
+    .modal-panel {{
+      width: min(64rem, 96vw);
+      max-height: 82vh;
+      overflow: auto;
+      background: var(--panel);
+      border: 1px solid var(--border-strong);
+      border-radius: 1rem;
+      box-shadow: var(--shadow);
+      padding: 1rem;
+    }}
+    .qty-editor {{
+      display: grid;
+      gap: 0.5rem;
+    }}
+    .qty-list {{
+      display: flex;
+      gap: 0.35rem;
+      flex-wrap: wrap;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }}
+    .qty-list li {{
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.25rem 0.55rem;
+      background: white;
+    }}
+    .qty-add-row {{
+      display: flex;
+      gap: 0.4rem;
+      align-items: center;
+    }}
+    .qty-add-row input {{
+      width: 7rem;
+      padding: 0.45rem 0.5rem;
+    }}
     .section-note {{
       margin: 0 0 0.75rem;
       color: var(--muted);
@@ -1328,12 +1536,14 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
 
         <div class="actions">
           <button type="submit">Process Doc Package</button>
+          {quote_prep_button_html}
           <span class="status-line">Processing flattens zip contents, mirrors the processed outputs into both configured roots, and runs BOM intake from the same package.</span>
         </div>
       </form>
 
       {callout_html}
     </section>
+    {quote_prep_modal_html}
   </main>
   <script>
     (function() {{
@@ -1420,6 +1630,253 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
 
       hookLookup("customer", "customer_suggestions", "/api/lookups/customers");
       hookCustomerFilteredContactLookup("customer", "contact_name", "contact_suggestions", "/api/lookups/contacts");
+
+      const toggleProcessedButton = document.getElementById("toggle-processed-filenames");
+      const hiddenFilenames = document.getElementById("processed-filenames-hidden");
+      if (toggleProcessedButton && hiddenFilenames) {{
+        toggleProcessedButton.addEventListener("click", function() {{
+          const isHidden = hiddenFilenames.classList.contains("hidden");
+          hiddenFilenames.classList.toggle("hidden", !isHidden);
+          toggleProcessedButton.textContent = isHidden ? "Collapse filenames" : "Show all filenames";
+        }});
+      }}
+
+      const openQuotePrepButton = document.getElementById("open-quote-prep-modal");
+      const overlay = document.getElementById("quote-prep-overlay");
+      const closeQuotePrepButton = document.getElementById("close-quote-prep-modal");
+      const saveQuotePrepButton = document.getElementById("save-quote-prep");
+      const rowsEl = document.getElementById("quote-prep-rows");
+      const statusEl = document.getElementById("quote-prep-status");
+      const errorEl = document.getElementById("quote-prep-error");
+      let quotePrepRows = [];
+      let activeBomIntakeId = null;
+
+      function showQuotePrepError(message) {{
+        if (!errorEl) return;
+        if (!message) {{
+          errorEl.classList.add("hidden");
+          errorEl.textContent = "";
+          return;
+        }}
+        errorEl.classList.remove("hidden");
+        errorEl.textContent = message;
+      }}
+
+      function parseQty(value) {{
+        const parsed = Number(value);
+        if (!Number.isInteger(parsed) || parsed <= 0) return null;
+        return parsed;
+      }}
+
+      function qtyValuesToString(qtys) {{
+        return qtys.join(",");
+      }}
+
+      function renderQuotePrepRows() {{
+        if (!rowsEl) return;
+        rowsEl.innerHTML = "";
+        quotePrepRows.forEach((row, index) => {{
+          const tr = document.createElement("tr");
+          tr.innerHTML =
+            "<td><input type=\\"checkbox\\" " + (row.includeInQuote ? "checked" : "") + " data-idx=\\"" + index + "\\" data-act=\\"toggle-include\\"></td>" +
+            "<td><code>" + row.partNumber + "</code></td>" +
+            "<td>" + row.description + "</td>" +
+            "<td>" + row.revision + "</td>" +
+            "<td>" + row.drawingOrItem + "</td>" +
+            "<td>" +
+              "<div class=\\"qty-editor\\">" +
+                "<ul class=\\"qty-list\\" id=\\"qty-list-" + index + "\\"></ul>" +
+                "<div class=\\"qty-add-row\\">" +
+                  "<input type=\\"number\\" min=\\"1\\" step=\\"1\\" id=\\"qty-input-" + index + "\\" " + (row.includeInQuote ? "" : "disabled") + ">" +
+                  "<button type=\\"button\\" class=\\"ghost\\" data-idx=\\"" + index + "\\" data-act=\\"add-qty\\" " + (row.includeInQuote ? "" : "disabled") + ">Add</button>" +
+                "</div>" +
+              "</div>" +
+            "</td>";
+          rowsEl.appendChild(tr);
+
+          const qtyListEl = document.getElementById("qty-list-" + index);
+          if (qtyListEl) {{
+            row.qtys.forEach((qty, qtyIndex) => {{
+              const li = document.createElement("li");
+              li.innerHTML =
+                "<span>" + qty + "</span>" +
+                "<button type=\\"button\\" class=\\"ghost\\" data-idx=\\"" + index + "\\" data-qty-idx=\\"" + qtyIndex + "\\" data-act=\\"remove-qty\\" " + (row.includeInQuote ? "" : "disabled") + ">x</button>";
+              qtyListEl.appendChild(li);
+            }});
+          }}
+        }});
+      }}
+
+      if (rowsEl) {{
+        rowsEl.addEventListener("click", function(event) {{
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          const action = target.getAttribute("data-act");
+          if (!action) return;
+          const idx = Number(target.getAttribute("data-idx"));
+          const row = quotePrepRows[idx];
+          if (!row) return;
+
+          if (action === "add-qty") {{
+            const input = document.getElementById("qty-input-" + idx);
+            if (!(input instanceof HTMLInputElement)) return;
+            const parsed = parseQty(input.value.trim());
+            if (parsed === null) {{
+              showQuotePrepError("Qty breaks must be positive whole numbers.");
+              return;
+            }}
+            if (row.qtys.includes(parsed)) {{
+              showQuotePrepError("Qty breaks cannot contain duplicate values.");
+              return;
+            }}
+            row.qtys.push(parsed);
+            input.value = "";
+            showQuotePrepError("");
+            renderQuotePrepRows();
+            return;
+          }}
+
+          if (action === "remove-qty") {{
+            const qtyIdx = Number(target.getAttribute("data-qty-idx"));
+            row.qtys.splice(qtyIdx, 1);
+            renderQuotePrepRows();
+          }}
+        }});
+
+        rowsEl.addEventListener("change", function(event) {{
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          if (target.getAttribute("data-act") !== "toggle-include") return;
+          const idx = Number(target.getAttribute("data-idx"));
+          const row = quotePrepRows[idx];
+          if (!row || !(target instanceof HTMLInputElement)) return;
+          row.includeInQuote = target.checked;
+          if (row.includeInQuote && row.qtys.length === 0) {{
+            row.qtys = [1];
+          }}
+          renderQuotePrepRows();
+        }});
+      }}
+
+      async function loadQuotePrepCandidates() {{
+        if (!activeBomIntakeId || !rowsEl) return;
+        showQuotePrepError("");
+        statusEl.textContent = "Loading quote prep candidates...";
+        try {{
+          const response = await fetch("/api/quote-prep/candidates?bom_intake_id=" + encodeURIComponent(String(activeBomIntakeId)));
+          const payload = await response.json();
+          if (!response.ok) {{
+            throw new Error(payload && payload.error ? payload.error : "Unable to load candidates.");
+          }}
+          quotePrepRows = (payload.items || []).map((item) => {{
+            const qtySource = (item.quoteQtyBreaks || "1").trim();
+            const qtys = qtySource
+              ? qtySource.split(",").map((v) => Number(v.trim())).filter((v) => Number.isInteger(v) && v > 0)
+              : [];
+            return {{
+              bomRootId: item.bomRootId,
+              includeInQuote: Boolean(item.includeInQuote),
+              partNumber: String(item.partNumber || ""),
+              description: String(item.description || ""),
+              revision: String(item.revision || ""),
+              drawingOrItem: String(item.drawingOrItem || ""),
+              qtys: qtys.length > 0 ? qtys : [1],
+            }};
+          }});
+          renderQuotePrepRows();
+          statusEl.textContent = "Loaded " + quotePrepRows.length + " candidate part(s).";
+        }} catch (err) {{
+          const message = err instanceof Error ? err.message : "Unable to load candidates.";
+          showQuotePrepError(message);
+          statusEl.textContent = "";
+        }}
+      }}
+
+      async function saveQuotePrep() {{
+        if (!activeBomIntakeId) return;
+        showQuotePrepError("");
+        const items = [];
+        for (const row of quotePrepRows) {{
+          if (!row.includeInQuote) {{
+            items.push({{
+              bomRootId: row.bomRootId,
+              includeInQuote: false,
+              quoteQtyBreaks: "",
+            }});
+            continue;
+          }}
+          if (!Array.isArray(row.qtys) || row.qtys.length === 0) {{
+            showQuotePrepError("Each included row requires at least one qty break.");
+            return;
+          }}
+          const seen = new Set();
+          for (const qty of row.qtys) {{
+            if (!Number.isInteger(qty) || qty <= 0) {{
+              showQuotePrepError("Qty breaks must be positive whole numbers.");
+              return;
+            }}
+            if (seen.has(qty)) {{
+              showQuotePrepError("Qty breaks cannot contain duplicate values.");
+              return;
+            }}
+            seen.add(qty);
+          }}
+          items.push({{
+            bomRootId: row.bomRootId,
+            includeInQuote: true,
+            quoteQtyBreaks: qtyValuesToString(row.qtys),
+          }});
+        }}
+
+        statusEl.textContent = "Saving quote prep decisions...";
+        try {{
+          const response = await fetch("/api/quote-prep/save", {{
+            method: "POST",
+            headers: {{ "Content-Type": "application/json" }},
+            body: JSON.stringify({{
+              bomIntakeId: activeBomIntakeId,
+              items: items,
+            }}),
+          }});
+          const payload = await response.json();
+          if (!response.ok) {{
+            throw new Error(payload && payload.error ? payload.error : "Unable to save quote prep decisions.");
+          }}
+          statusEl.textContent = "Quote prep saved.";
+        }} catch (err) {{
+          const message = err instanceof Error ? err.message : "Unable to save quote prep decisions.";
+          showQuotePrepError(message);
+          statusEl.textContent = "";
+        }}
+      }}
+
+      function closeQuotePrepModal() {{
+        if (!overlay) return;
+        overlay.classList.add("hidden");
+      }}
+
+      if (openQuotePrepButton && overlay) {{
+        openQuotePrepButton.addEventListener("click", function() {{
+          const bomIntakeIdValue = openQuotePrepButton.getAttribute("data-bom-intake-id");
+          if (!bomIntakeIdValue) return;
+          activeBomIntakeId = Number(bomIntakeIdValue);
+          overlay.classList.remove("hidden");
+          void loadQuotePrepCandidates();
+        }});
+      }}
+      if (closeQuotePrepButton) {{
+        closeQuotePrepButton.addEventListener("click", closeQuotePrepModal);
+      }}
+      if (overlay) {{
+        overlay.addEventListener("click", function(event) {{
+          if (event.target === overlay) closeQuotePrepModal();
+        }});
+      }}
+      if (saveQuotePrepButton) {{
+        saveQuotePrepButton.addEventListener("click", function() {{
+          void saveQuotePrep();
+        }});
+      }}
     }})();
   </script>
 </body>

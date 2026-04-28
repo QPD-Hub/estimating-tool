@@ -253,6 +253,9 @@ class BomIntakeService:
                     customer_name=metadata.customer_name,
                     uploaded_by=metadata.uploaded_by,
                     quote_number=metadata.quote_number,
+                    quoted_by=metadata.quoted_by,
+                    contact_name=metadata.contact_name,
+                    quote_due_date=metadata.quote_due_date,
                     source_file_name=metadata.source_file_name or located.filename,
                     source_file_path=metadata.source_file_path
                     or located.source_file_path,
