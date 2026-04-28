@@ -16,6 +16,7 @@ from src.services.bom_intake_db import (
     BomIntakeDbError,
     BomIntakeDbProcedureError,
     BomIntakeDbService,
+    _load_pymssql_connect,
 )
 from src.services.bom_intake_payload import BomIntakePayloadError
 from src.services.bom_intake_service import (
@@ -48,6 +49,9 @@ class ViewState:
     customer: str = ""
     rfq_number: str = ""
     uploaded_by: str = ""
+    quoted_by: str = ""
+    contact_name: str = ""
+    quote_due_date: str = ""
     intake_notes: str = ""
     message: str = ""
     error: str = ""
@@ -56,10 +60,71 @@ class ViewState:
     diagnostics: dict[str, object] | None = None
 
 
+class LookupService:
+    def __init__(
+        self,
+        sql_config: SqlServerConfig,
+        connect: Callable[..., object] | None = None,
+    ) -> None:
+        self._sql_config = sql_config
+        self._connect = connect or _load_pymssql_connect()
+
+    def _connection_kwargs(self) -> dict[str, object]:
+        return {
+            "server": self._sql_config.host,
+            "user": self._sql_config.username,
+            "password": self._sql_config.password,
+            "database": self._sql_config.database,
+            "port": self._sql_config.port,
+            "timeout": self._sql_config.timeout,
+            "login_timeout": self._sql_config.timeout,
+            "autocommit": True,
+        }
+
+    def list_customers(self, search: str | None) -> list[str]:
+        return self._query_names(
+            """
+SELECT TOP (50) Customer
+FROM HILLSBORO.dbo.Customer
+WHERE Status = 'Active'
+  AND Customer IS NOT NULL
+  AND LTRIM(RTRIM(Customer)) <> ''
+  AND (%s IS NULL OR Customer LIKE '%%' + %s + '%%')
+ORDER BY Customer;
+""",
+            search,
+        )
+
+    def list_contacts(self, search: str | None) -> list[str]:
+        return self._query_names(
+            """
+SELECT TOP (50) Contact_Name
+FROM HILLSBORO.dbo.Contact
+WHERE Contact_Name IS NOT NULL
+  AND LTRIM(RTRIM(Contact_Name)) <> ''
+  AND (%s IS NULL OR Contact_Name LIKE '%%' + %s + '%%')
+ORDER BY Contact_Name;
+""",
+            search,
+        )
+
+    def _query_names(self, sql: str, search: str | None) -> list[str]:
+        normalized_search = search.strip() if search and search.strip() else None
+        connection = self._connect(**self._connection_kwargs())
+        cursor = connection.cursor()
+        try:
+            cursor.execute(sql, (normalized_search, normalized_search))
+            return [str(row[0]).strip() for row in cursor.fetchall() if row and str(row[0]).strip()]
+        finally:
+            cursor.close()
+            connection.close()
+
+
 def create_app(
     config: AppConfig,
     bom_intake_service_override: BomIntakeService | None = None,
     doc_package_intake_service_override: DocPackageIntakeService | None = None,
+    lookup_service_override: LookupService | None = None,
 ) -> Callable:
     document_service = DocumentIntakeService(
         automation_drop_root=config.automation_drop_root,
@@ -69,9 +134,10 @@ def create_app(
     doc_package_intake_service: DocPackageIntakeService | None = (
         doc_package_intake_service_override
     )
+    lookup_service: LookupService | None = lookup_service_override
 
     def app(environ, start_response):
-        nonlocal bom_intake_service, doc_package_intake_service
+        nonlocal bom_intake_service, doc_package_intake_service, lookup_service
         method = environ.get("REQUEST_METHOD", "GET").upper()
         path = environ.get("PATH_INFO", "/")
 
@@ -111,6 +177,14 @@ def create_app(
                 start_response,
                 bom_intake_service,
             )
+        if path == "/api/lookups/customers" and method == "GET":
+            if lookup_service is None:
+                lookup_service = LookupService(sql_config=SqlServerConfig.load())
+            return _handle_lookup_customers(environ, start_response, lookup_service)
+        if path == "/api/lookups/contacts" and method == "GET":
+            if lookup_service is None:
+                lookup_service = LookupService(sql_config=SqlServerConfig.load())
+            return _handle_lookup_contacts(environ, start_response, lookup_service)
 
         start_response(
             f"{HTTPStatus.NOT_FOUND.value} {HTTPStatus.NOT_FOUND.phrase}",
@@ -130,12 +204,18 @@ def _handle_upload(
     customer = ""
     rfq_number = ""
     uploaded_by = ""
+    quoted_by = ""
+    contact_name = ""
+    quote_due_date = ""
     intake_notes = ""
     try:
         form = _parse_form_request(environ)
         customer = form.getfirst("customer", "")
         rfq_number = form.getfirst("rfq_number", "")
         uploaded_by = form.getfirst("uploaded_by", "")
+        quoted_by = form.getfirst("quoted_by", "")
+        contact_name = form.getfirst("contact_name", "")
+        quote_due_date = form.getfirst("quote_due_date", "")
         intake_notes = form.getfirst("intake_notes", "")
         file_fields = form["documents"] if "documents" in form else []
         if not isinstance(file_fields, list):
@@ -156,6 +236,9 @@ def _handle_upload(
             customer_name=customer,
             rfq_number=rfq_number,
             uploaded_by=uploaded_by,
+            quoted_by=quoted_by,
+            contact_name=contact_name,
+            quote_due_date=quote_due_date,
             intake_notes=intake_notes,
             uploaded_files=uploaded_files,
         )
@@ -171,6 +254,9 @@ def _handle_upload(
                     customer=result.customer_name,
                     rfq_number=result.rfq_number,
                     uploaded_by=result.uploaded_by,
+                    quoted_by=result.quoted_by,
+                    contact_name=result.contact_name or "",
+                    quote_due_date=result.quote_due_date or "",
                     intake_notes=result.intake_notes or "",
                     message=message,
                     result=result.document_result,
@@ -188,6 +274,9 @@ def _handle_upload(
                     customer=customer,
                     rfq_number=rfq_number,
                     uploaded_by=uploaded_by,
+                    quoted_by=quoted_by,
+                    contact_name=contact_name,
+                    quote_due_date=quote_due_date,
                     intake_notes=intake_notes,
                     error=str(exc),
                     result=exc.document_result,
@@ -206,6 +295,9 @@ def _handle_upload(
                     customer=customer,
                     rfq_number=rfq_number,
                     uploaded_by=uploaded_by,
+                    quoted_by=quoted_by,
+                    contact_name=contact_name,
+                    quote_due_date=quote_due_date,
                     intake_notes=intake_notes,
                     error="Unexpected server error while processing the document package.",
                 ),
@@ -561,6 +653,49 @@ def _parse_bool_value(value: object, field_name: str) -> bool:
         if normalized in {"0", "false", "no", "off"}:
             return False
     raise ValueError(f"{field_name} must be a boolean value.")
+
+
+def _handle_lookup_customers(environ, start_response, lookup_service: LookupService):
+    try:
+        search = _query_value(environ, "search")
+        return _respond_json(
+            start_response,
+            {"items": lookup_service.list_customers(search)},
+            status=HTTPStatus.OK,
+        )
+    except Exception:
+        logger.exception("Customer lookup failed.")
+        return _respond_json(
+            start_response,
+            {"error": "Unexpected server error while loading customers."},
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+
+
+def _handle_lookup_contacts(environ, start_response, lookup_service: LookupService):
+    try:
+        search = _query_value(environ, "search")
+        return _respond_json(
+            start_response,
+            {"items": lookup_service.list_contacts(search)},
+            status=HTTPStatus.OK,
+        )
+    except Exception:
+        logger.exception("Contact lookup failed.")
+        return _respond_json(
+            start_response,
+            {"error": "Unexpected server error while loading contacts."},
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+
+
+def _query_value(environ, name: str) -> str | None:
+    query_values = parse_qs(environ.get("QUERY_STRING", ""), keep_blank_values=True)
+    values = query_values.get(name)
+    if not values:
+        return None
+    value = values[-1].strip()
+    return value or None
 
 
 def _form_value(form: cgi.FieldStorage, *names: str) -> str:
@@ -1097,7 +1232,8 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
         <div class="form-grid">
           <label for="customer">
             Customer
-            <input id="customer" name="customer" type="text" required value="{html.escape(view_state.customer)}">
+            <input id="customer" name="customer" type="text" list="customer_suggestions" required value="{html.escape(view_state.customer)}">
+            <datalist id="customer_suggestions"></datalist>
           </label>
           <label for="rfq_number">
             RFQ Number
@@ -1106,6 +1242,19 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
           <label for="uploaded_by">
             Uploaded By
             <input id="uploaded_by" name="uploaded_by" type="text" required value="{html.escape(view_state.uploaded_by)}">
+          </label>
+          <label for="quoted_by">
+            Quoted By
+            <input id="quoted_by" name="quoted_by" type="text" required value="{html.escape(view_state.quoted_by)}">
+          </label>
+          <label for="contact_name">
+            Contact
+            <input id="contact_name" name="contact_name" type="text" list="contact_suggestions" value="{html.escape(view_state.contact_name)}">
+            <datalist id="contact_suggestions"></datalist>
+          </label>
+          <label for="quote_due_date">
+            Due Date
+            <input id="quote_due_date" name="quote_due_date" type="date" value="{html.escape(view_state.quote_due_date)}">
           </label>
           <label for="documents">
             Package Files
@@ -1127,5 +1276,32 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       {callout_html}
     </section>
   </main>
+  <script>
+    (function() {{
+      function hookLookup(inputId, datalistId, endpoint) {{
+        const input = document.getElementById(inputId);
+        const datalist = document.getElementById(datalistId);
+        if (!input || !datalist) return;
+        let token = 0;
+        input.addEventListener("input", async function() {{
+          const search = input.value.trim();
+          token += 1;
+          const requestToken = token;
+          try {{
+            const response = await fetch(endpoint + "?search=" + encodeURIComponent(search));
+            if (!response.ok || requestToken !== token) return;
+            const payload = await response.json();
+            if (!payload || !Array.isArray(payload.items)) return;
+            datalist.innerHTML = payload.items
+              .map((item) => "<option value=\\"" + String(item).replaceAll("\\"", "&quot;") + "\\"></option>")
+              .join("");
+          }} catch (_err) {{
+          }}
+        }});
+      }}
+      hookLookup("customer", "customer_suggestions", "/api/lookups/customers");
+      hookLookup("contact_name", "contact_suggestions", "/api/lookups/contacts");
+    }})();
+  </script>
 </body>
 </html>"""

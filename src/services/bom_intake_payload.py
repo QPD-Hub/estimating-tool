@@ -21,6 +21,9 @@ class BomIntakeMetadata:
     source_file_name: str
     uploaded_by: str
     quote_number: str | None = None
+    quoted_by: str | None = None
+    contact_name: str | None = None
+    quote_due_date: str | None = None
     source_file_path: str | None = None
     source_sheet_name: str | None = None
     source_type: str | None = None
@@ -44,6 +47,9 @@ class BomIntakeMetadata:
             _normalize_required_text(self.uploaded_by, "uploaded_by"),
         )
         object.__setattr__(self, "quote_number", _normalize_optional_text(self.quote_number))
+        object.__setattr__(self, "quoted_by", _normalize_optional_text(self.quoted_by))
+        object.__setattr__(self, "contact_name", _normalize_optional_text(self.contact_name))
+        object.__setattr__(self, "quote_due_date", _normalize_optional_text(self.quote_due_date))
         object.__setattr__(
             self,
             "source_file_path",
@@ -66,6 +72,9 @@ class BomIntakeMetadata:
         return CreateBomIntakeInput(
             CustomerName=self.customer_name,
             QuoteNumber=self.quote_number,
+            QuotedBy=self.quoted_by,
+            ContactName=self.contact_name,
+            QuoteDueDate=self.quote_due_date,
             SourceFileName=self.source_file_name,
             SourceFilePath=self.source_file_path,
             SourceSheetName=self.source_sheet_name,

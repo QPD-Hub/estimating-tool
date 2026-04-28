@@ -10,6 +10,9 @@ GO
 CREATE OR ALTER PROCEDURE [dbo].[usp_BOM_Intake_Create]
     @CustomerName       NVARCHAR(200),
     @QuoteNumber        NVARCHAR(50) = NULL,
+    @QuotedBy           NVARCHAR(100) = NULL,
+    @ContactName        NVARCHAR(200) = NULL,
+    @QuoteDueDate       DATE = NULL,
     @SourceFileName     NVARCHAR(260) = NULL,
     @SourceFilePath     NVARCHAR(500) = NULL,
     @SourceSheetName    NVARCHAR(128) = NULL,
@@ -33,6 +36,9 @@ BEGIN
     (
         CustomerName,
         QuoteNumber,
+        QuotedBy,
+        ContactName,
+        QuoteDueDate,
         SourceFileName,
         SourceFilePath,
         SourceSheetName,
@@ -46,6 +52,9 @@ BEGIN
     (
         @CustomerNameNorm,
         NULLIF(LTRIM(RTRIM(@QuoteNumber)), ''),
+        NULLIF(LTRIM(RTRIM(@QuotedBy)), ''),
+        NULLIF(LTRIM(RTRIM(@ContactName)), ''),
+        @QuoteDueDate,
         NULLIF(LTRIM(RTRIM(@SourceFileName)), ''),
         NULLIF(LTRIM(RTRIM(@SourceFilePath)), ''),
         NULLIF(LTRIM(RTRIM(@SourceSheetName)), ''),

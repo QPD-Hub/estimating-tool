@@ -36,6 +36,9 @@ class DocPackageIntakeResult:
     customer_name: str
     rfq_number: str
     uploaded_by: str
+    quoted_by: str
+    contact_name: str | None
+    quote_due_date: str | None
     uploaded_files_count: int
     selected_bom_file_name: str
     document_result: DocumentIntakeResult
@@ -60,12 +63,24 @@ class DocPackageIntakeService:
         customer_name: str,
         rfq_number: str,
         uploaded_by: str,
+        quoted_by: str,
+        contact_name: str | None = None,
+        quote_due_date: str | None = None,
         uploaded_files: list[UploadedFile],
         intake_notes: str | None = None,
     ) -> DocPackageIntakeResult:
         normalized_uploaded_by = uploaded_by.strip()
         if not normalized_uploaded_by:
             raise DocPackageIntakeError("Uploaded By is required.")
+        normalized_quoted_by = quoted_by.strip()
+        if not normalized_quoted_by:
+            raise DocPackageIntakeError("Quoted By is required.")
+        normalized_contact_name = (
+            contact_name.strip() if contact_name and contact_name.strip() else None
+        )
+        normalized_quote_due_date = (
+            quote_due_date.strip() if quote_due_date and quote_due_date.strip() else None
+        )
 
         if not uploaded_files:
             raise DocPackageIntakeError("At least one file is required.")
@@ -73,6 +88,9 @@ class DocPackageIntakeService:
         bom_upload, bom_preview = self._select_bom_upload(
             customer_name=customer_name,
             uploaded_by=normalized_uploaded_by,
+            quoted_by=normalized_quoted_by,
+            contact_name=normalized_contact_name,
+            quote_due_date=normalized_quote_due_date,
             rfq_number=rfq_number,
             intake_notes=intake_notes,
             uploaded_files=uploaded_files,
@@ -92,6 +110,9 @@ class DocPackageIntakeService:
                 header_data=self._build_bom_header(
                     customer_name=customer_name,
                     uploaded_by=normalized_uploaded_by,
+                    quoted_by=normalized_quoted_by,
+                    contact_name=normalized_contact_name,
+                    quote_due_date=normalized_quote_due_date,
                     rfq_number=rfq_number,
                     intake_notes=intake_notes,
                     bom_file_name=bom_upload.filename,
@@ -112,6 +133,9 @@ class DocPackageIntakeService:
             customer_name=customer_name.strip(),
             rfq_number=rfq_number.strip(),
             uploaded_by=normalized_uploaded_by,
+            quoted_by=normalized_quoted_by,
+            contact_name=normalized_contact_name,
+            quote_due_date=normalized_quote_due_date,
             uploaded_files_count=len(uploaded_files),
             selected_bom_file_name=bom_upload.filename,
             document_result=document_result,
@@ -139,6 +163,9 @@ class DocPackageIntakeService:
         _, preview = self._select_bom_upload(
             customer_name=customer_name,
             uploaded_by=normalized_uploaded_by,
+            quoted_by=normalized_uploaded_by,
+            contact_name=None,
+            quote_due_date=None,
             rfq_number=rfq_number,
             intake_notes=intake_notes,
             uploaded_files=uploaded_files,
@@ -150,6 +177,9 @@ class DocPackageIntakeService:
         *,
         customer_name: str,
         uploaded_by: str,
+        quoted_by: str,
+        contact_name: str | None,
+        quote_due_date: str | None,
         rfq_number: str,
         intake_notes: str | None,
         uploaded_files: list[UploadedFile],
@@ -178,6 +208,9 @@ class DocPackageIntakeService:
                     header_data=self._build_bom_header(
                         customer_name=customer_name,
                         uploaded_by=uploaded_by,
+                        quoted_by=quoted_by,
+                        contact_name=contact_name,
+                        quote_due_date=quote_due_date,
                         rfq_number=rfq_number,
                         intake_notes=intake_notes,
                         bom_file_name=bom_candidate.filename,
@@ -206,6 +239,9 @@ class DocPackageIntakeService:
         *,
         customer_name: str,
         uploaded_by: str,
+        quoted_by: str,
+        contact_name: str | None,
+        quote_due_date: str | None,
         rfq_number: str,
         intake_notes: str | None,
         bom_file_name: str,
@@ -214,6 +250,9 @@ class DocPackageIntakeService:
             "customer_name": customer_name.strip(),
             "uploaded_by": uploaded_by.strip(),
             "quote_number": rfq_number.strip() if rfq_number and rfq_number.strip() else None,
+            "quoted_by": quoted_by.strip(),
+            "contact_name": contact_name,
+            "quote_due_date": quote_due_date,
             "intake_notes": intake_notes.strip() if intake_notes and intake_notes.strip() else None,
             "source_file_name": bom_file_name,
         }

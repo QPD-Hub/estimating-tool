@@ -26,6 +26,9 @@ Creates the intake header and returns `BomIntakeId`.
 | --- | --- | --- | --- |
 | `CustomerName` | `NVARCHAR(200)` | Yes | Trimmed and uppercased in SQL |
 | `QuoteNumber` | `NVARCHAR(50)` | No | |
+| `QuotedBy` | `NVARCHAR(100)` | No | |
+| `ContactName` | `NVARCHAR(200)` | No | |
+| `QuoteDueDate` | `DATE` | No | |
 | `SourceFileName` | `NVARCHAR(260)` | No | |
 | `SourceFilePath` | `NVARCHAR(500)` | No | |
 | `SourceSheetName` | `NVARCHAR(128)` | No | |
@@ -170,6 +173,9 @@ The app supports dry-run preview mode. Dry-run must:
     "params": {
       "CustomerName": "ACME",
       "QuoteNumber": "Q-100",
+      "QuotedBy": "estimator",
+      "ContactName": "Alice Smith",
+      "QuoteDueDate": "2026-05-01",
       "SourceFileName": "customer-bom.xlsx",
       "SourceFilePath": "/tmp/customer-bom.xlsx",
       "SourceSheetName": "BOM",

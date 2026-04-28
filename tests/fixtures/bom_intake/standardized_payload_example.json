@@ -4,6 +4,9 @@
     "params": {
       "CustomerName": "ACME",
       "QuoteNumber": "Q-100",
+      "QuotedBy": null,
+      "ContactName": null,
+      "QuoteDueDate": null,
       "SourceFileName": "customer-bom.xlsx",
       "SourceFilePath": "/tmp/customer-bom.xlsx",
       "SourceSheetName": "BOM",

@@ -7,6 +7,9 @@ from typing import Any, ClassVar, TypeVar
 CREATE_PROC_SCALAR_FIELDS = (
     "CustomerName",
     "QuoteNumber",
+    "QuotedBy",
+    "ContactName",
+    "QuoteDueDate",
     "SourceFileName",
     "SourceFilePath",
     "SourceSheetName",
@@ -138,6 +141,9 @@ class _StrictContractModel:
 class CreateBomIntakeInput(_StrictContractModel):
     CustomerName: str
     QuoteNumber: str | None = None
+    QuotedBy: str | None = None
+    ContactName: str | None = None
+    QuoteDueDate: str | None = None
     SourceFileName: str | None = None
     SourceFilePath: str | None = None
     SourceSheetName: str | None = None

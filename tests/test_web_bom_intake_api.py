@@ -227,6 +227,9 @@ class FakeDocPackageIntakeService:
         customer_name,
         rfq_number,
         uploaded_by,
+        quoted_by,
+        contact_name=None,
+        quote_due_date=None,
         uploaded_files,
         intake_notes=None,
     ):
@@ -235,6 +238,9 @@ class FakeDocPackageIntakeService:
                 "customer_name": customer_name,
                 "rfq_number": rfq_number,
                 "uploaded_by": uploaded_by,
+                "quoted_by": quoted_by,
+                "contact_name": contact_name,
+                "quote_due_date": quote_due_date,
                 "uploaded_files": list(uploaded_files),
                 "intake_notes": intake_notes,
             }
@@ -257,6 +263,9 @@ class FakeDocPackageIntakeService:
             customer_name=customer_name,
             rfq_number=rfq_number,
             uploaded_by=uploaded_by,
+            quoted_by=quoted_by,
+            contact_name=contact_name,
+            quote_due_date=quote_due_date,
             uploaded_files_count=len(list(uploaded_files)),
             selected_bom_file_name="bom.xlsx",
             document_result=document_result,
@@ -588,6 +597,14 @@ class WebBomIntakeApiTests(unittest.TestCase):
         self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
         self.assertIn("Doc Package Intake", body)
         self.assertIn('name="uploaded_by"', body)
+        self.assertIn('name="quoted_by"', body)
+        self.assertIn('name="contact_name"', body)
+        self.assertIn('name="quote_due_date"', body)
+        self.assertIn('name="customer"', body)
+        self.assertIn('list="customer_suggestions"', body)
+        self.assertIn("/api/lookups/customers", body)
+        self.assertNotIn('name="quote_number"', body)
+        self.assertNotIn('name="part_number"', body)
         self.assertIn('name="documents"', body)
         self.assertIn("Process Doc Package", body)
 
@@ -612,6 +629,9 @@ class WebBomIntakeApiTests(unittest.TestCase):
                     "customer": "ACME",
                     "rfq_number": "Q-100",
                     "uploaded_by": "estimator",
+                    "quoted_by": "buyer1",
+                    "contact_name": "Alice",
+                    "quote_due_date": "2026-05-01",
                     "intake_notes": "same workflow",
                 },
                 file_field_name="documents",
@@ -623,9 +643,63 @@ class WebBomIntakeApiTests(unittest.TestCase):
         self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
         self.assertEqual(fake_package_service.calls[0]["customer_name"], "ACME")
         self.assertEqual(fake_package_service.calls[0]["uploaded_by"], "estimator")
+        self.assertEqual(fake_package_service.calls[0]["quoted_by"], "buyer1")
+        self.assertEqual(fake_package_service.calls[0]["contact_name"], "Alice")
+        self.assertEqual(fake_package_service.calls[0]["quote_due_date"], "2026-05-01")
         self.assertIn("Doc Package Intake Complete", body)
         self.assertIn("BOM Intake Overview", body)
         self.assertIn("bom.xlsx", body)
+
+    def test_customer_lookup_endpoint_returns_items(self) -> None:
+        class FakeLookupService:
+            def list_customers(self, search):
+                self.search = search
+                return ["ACME", "ACME WEST"]
+
+            def list_contacts(self, search):
+                return []
+
+        lookup = FakeLookupService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                lookup_service_override=lookup,
+            )
+            status, headers, body = _invoke_get(app, "/api/lookups/customers?search=ac")
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        self.assertEqual(json.loads(body)["items"], ["ACME", "ACME WEST"])
+        self.assertEqual(lookup.search, "ac")
+
+    def test_contact_lookup_endpoint_returns_items(self) -> None:
+        class FakeLookupService:
+            def list_customers(self, search):
+                return []
+
+            def list_contacts(self, search):
+                self.search = search
+                return ["Alice Smith"]
+
+        lookup = FakeLookupService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                lookup_service_override=lookup,
+            )
+            status, _headers, body = _invoke_get(app, "/api/lookups/contacts?search=ali")
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(json.loads(body)["items"], ["Alice Smith"])
+        self.assertEqual(lookup.search, "ali")
 
 
 def _invoke_json(app, path: str, payload: dict[str, object]):
@@ -719,7 +793,8 @@ def _invoke_get(app, path: str):
         app(
             {
                 "REQUEST_METHOD": "GET",
-                "PATH_INFO": path,
+                "PATH_INFO": path.split("?", 1)[0],
+                "QUERY_STRING": path.split("?", 1)[1] if "?" in path else "",
                 "CONTENT_LENGTH": "0",
                 "wsgi.input": io.BytesIO(b""),
             },

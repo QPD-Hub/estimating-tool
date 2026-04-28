@@ -108,6 +108,9 @@ DECLARE @BomIntakeId BIGINT;
 EXEC dbo.usp_BOM_Intake_Create
     @CustomerName = %s,
     @QuoteNumber = %s,
+    @QuotedBy = %s,
+    @ContactName = %s,
+    @QuoteDueDate = %s,
     @SourceFileName = %s,
     @SourceFilePath = %s,
     @SourceSheetName = %s,

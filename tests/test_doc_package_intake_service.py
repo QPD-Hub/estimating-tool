@@ -97,6 +97,9 @@ class DocPackageIntakeServiceTests(unittest.TestCase):
             customer_name="ACME",
             rfq_number="Q-100",
             uploaded_by="estimator",
+            quoted_by="buyer1",
+            contact_name="Alice",
+            quote_due_date="2026-05-01",
             intake_notes="package intake",
             uploaded_files=[
                 UploadedFile(filename="notes.xlsx", content=b"not a bom"),
@@ -111,6 +114,12 @@ class DocPackageIntakeServiceTests(unittest.TestCase):
         self.assertEqual(bom_service.process_calls[0]["upload_data"]["filename"], "bom.xlsx")
         self.assertEqual(bom_service.process_calls[0]["header_data"]["customer_name"], "ACME")
         self.assertEqual(bom_service.process_calls[0]["header_data"]["quote_number"], "Q-100")
+        self.assertEqual(bom_service.process_calls[0]["header_data"]["quoted_by"], "buyer1")
+        self.assertEqual(bom_service.process_calls[0]["header_data"]["contact_name"], "Alice")
+        self.assertEqual(bom_service.process_calls[0]["header_data"]["quote_due_date"], "2026-05-01")
+        self.assertEqual(result.quoted_by, "buyer1")
+        self.assertEqual(result.contact_name, "Alice")
+        self.assertEqual(result.quote_due_date, "2026-05-01")
         self.assertEqual(result.bom_result["Summary"]["BomIntakeId"], 321)
 
     def test_intake_package_requires_bom_candidate_in_uploaded_documents(self) -> None:
@@ -127,7 +136,23 @@ class DocPackageIntakeServiceTests(unittest.TestCase):
                 customer_name="ACME",
                 rfq_number="Q-100",
                 uploaded_by="estimator",
+                quoted_by="buyer1",
                 uploaded_files=[UploadedFile(filename="drawing.pdf", content=b"pdf")],
+            )
+
+    def test_intake_package_requires_quoted_by(self) -> None:
+        service = DocPackageIntakeService(
+            FakeDocumentIntakeService(),
+            FakeBomIntakeService(),
+        )
+
+        with self.assertRaisesRegex(DocPackageIntakeError, "Quoted By is required"):
+            service.intake_package(
+                customer_name="ACME",
+                rfq_number="Q-100",
+                uploaded_by="estimator",
+                quoted_by="",
+                uploaded_files=[UploadedFile(filename="bom.xlsx", content=b"bom")],
             )
 
 
