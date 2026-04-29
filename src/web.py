@@ -246,6 +246,10 @@ def create_app(
             if quote_prep_service is None:
                 quote_prep_service = QuotePrepService(sql_config=SqlServerConfig.load())
             return _handle_quote_prep_save(environ, start_response, quote_prep_service)
+        if path == "/api/quote-prep/bridge-status" and method == "GET":
+            if quote_prep_service is None:
+                quote_prep_service = QuotePrepService(sql_config=SqlServerConfig.load())
+            return _handle_quote_prep_bridge_status(environ, start_response, quote_prep_service)
 
         start_response(
             f"{HTTPStatus.NOT_FOUND.value} {HTTPStatus.NOT_FOUND.phrase}",
@@ -833,6 +837,37 @@ def _handle_quote_prep_save(
         return _respond_json(
             start_response,
             {"error": "Unexpected server error while saving quote prep decisions."},
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+
+
+def _handle_quote_prep_bridge_status(
+    environ,
+    start_response,
+    quote_prep_service: QuotePrepService,
+):
+    try:
+        jobboss_request_id = _required_positive_int_query_value(environ, "jobboss_request_id")
+        result = quote_prep_service.get_jobboss_request_status(jobboss_request_id)
+        return _respond_json(start_response, result, status=HTTPStatus.OK)
+    except (ValueError, QuotePrepRequestError) as exc:
+        return _respond_json(
+            start_response,
+            {"error": str(exc)},
+            status=HTTPStatus.BAD_REQUEST,
+        )
+    except QuotePrepDbError as exc:
+        logger.exception("Quote prep bridge status load failed.")
+        return _respond_json(
+            start_response,
+            {"error": str(exc)},
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+    except Exception:
+        logger.exception("Unexpected quote prep bridge status error.")
+        return _respond_json(
+            start_response,
+            {"error": "Unexpected server error while loading bridge request status."},
             status=HTTPStatus.INTERNAL_SERVER_ERROR,
         )
 
@@ -1668,6 +1703,54 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       const errorEl = document.getElementById("quote-prep-error");
       let quotePrepRows = [];
       let activeBomIntakeId = null;
+      let bridgePollTimer = null;
+
+      function clearBridgePollTimer() {{
+        if (bridgePollTimer) {{
+          clearTimeout(bridgePollTimer);
+          bridgePollTimer = null;
+        }}
+      }}
+
+      function statusDetailsText(payload) {{
+        const details = [];
+        if (payload && payload.jobBossRequestId) {{
+          details.push("RequestId " + payload.jobBossRequestId);
+        }}
+        if (payload && payload.jobBossQuoteId) {{
+          details.push("Quote ID " + payload.jobBossQuoteId);
+        }}
+        if (payload && payload.lastError) {{
+          details.push("Error: " + payload.lastError);
+        }}
+        return details.length > 0 ? " (" + details.join(" | ") + ")" : "";
+      }}
+
+      async function pollBridgeStatus(jobBossRequestId) {{
+        try {{
+          const response = await fetch(
+            "/api/quote-prep/bridge-status?jobboss_request_id=" + encodeURIComponent(String(jobBossRequestId))
+          );
+          const payload = await response.json();
+          if (!response.ok) {{
+            throw new Error(payload && payload.error ? payload.error : "Unable to load bridge status.");
+          }}
+          const statusValue = String(payload.status || "");
+          statusEl.textContent = statusValue + statusDetailsText(payload);
+          if (statusValue === "Queued" || statusValue === "Running") {{
+            clearBridgePollTimer();
+            bridgePollTimer = setTimeout(function() {{
+              void pollBridgeStatus(jobBossRequestId);
+            }}, 4000);
+            return;
+          }}
+          clearBridgePollTimer();
+        }} catch (err) {{
+          clearBridgePollTimer();
+          const message = err instanceof Error ? err.message : "Unable to load bridge status.";
+          showQuotePrepError(message);
+        }}
+      }}
 
       function showQuotePrepError(message) {{
         if (!errorEl) return;
@@ -1883,7 +1966,13 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
           if (!response.ok) {{
             throw new Error(payload && payload.error ? payload.error : "Unable to save quote prep decisions.");
           }}
-          statusEl.textContent = "JobBOSS quote request queued.";
+          const requestId = payload && payload.jobBossRequestId ? Number(payload.jobBossRequestId) : null;
+          if (!requestId || !Number.isInteger(requestId) || requestId <= 0) {{
+            throw new Error("Bridge request did not return JobBossRequestId.");
+          }}
+          statusEl.textContent = "Queued (RequestId " + requestId + ")";
+          clearBridgePollTimer();
+          void pollBridgeStatus(requestId);
         }} catch (err) {{
           const message = err instanceof Error ? err.message : "Unable to save quote prep decisions.";
           showQuotePrepError(message);
@@ -1893,6 +1982,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
 
       function closeQuotePrepModal() {{
         if (!overlay) return;
+        clearBridgePollTimer();
         overlay.classList.add("hidden");
       }}
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import xml.etree.ElementTree as ET
 from datetime import date, datetime
 from typing import Any, Callable
 from uuid import uuid4
@@ -85,6 +86,82 @@ EXEC dbo.usp_BOM_Root_SaveQuotePrep
             return bridge_request
         except Exception as exc:
             raise QuotePrepDbError("Failed to save quote prep decisions.") from exc
+        finally:
+            cursor.close()
+            connection.close()
+
+    def get_jobboss_request_status(self, jobboss_request_id: int) -> dict[str, object]:
+        if jobboss_request_id <= 0:
+            raise QuotePrepRequestError("jobBossRequestId must be a positive integer.")
+
+        connection = self._connect(**self._connection_kwargs())
+        cursor = connection.cursor(as_dict=True)
+        try:
+            cursor.execute(
+                """
+SELECT COLUMN_NAME
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'dbo'
+  AND TABLE_NAME = 'JobBossRequest';
+"""
+            )
+            columns = {
+                str(row.get("COLUMN_NAME"))
+                for row in (cursor.fetchall() or [])
+                if isinstance(row, dict) and row.get("COLUMN_NAME")
+            }
+            if "JobBossRequestId" not in columns:
+                raise QuotePrepDbError("JobBossRequest table is not available.")
+
+            status_col = _first_existing_column(
+                columns, "RequestStatus", "Status", "BridgeStatus"
+            )
+            error_col = _first_existing_column(
+                columns, "LastErrorMessage", "ErrorMessage", "LastError", "Error"
+            )
+            response_xml_col = _first_existing_column(
+                columns, "ResponseXml", "ResponseXML", "BridgeResponseXml"
+            )
+
+            selected_columns = ["JobBossRequestId"]
+            if status_col:
+                selected_columns.append(status_col)
+            if error_col:
+                selected_columns.append(error_col)
+            if response_xml_col:
+                selected_columns.append(response_xml_col)
+
+            select_list = ", ".join(f"[{name}]" for name in selected_columns)
+            cursor.execute(
+                f"""
+SELECT {select_list}
+FROM dbo.JobBossRequest
+WHERE JobBossRequestId = %s;
+""",
+                (jobboss_request_id,),
+            )
+            row = cursor.fetchone()
+            if not isinstance(row, dict):
+                raise QuotePrepRequestError("JobBossRequestId was not found.")
+
+            raw_status = _optional_text(row.get(status_col)) if status_col else None
+            normalized_status = _normalize_bridge_status(raw_status)
+            last_error = _optional_text(row.get(error_col)) if error_col else None
+            response_xml = _optional_text(row.get(response_xml_col)) if response_xml_col else None
+            quote_id = _extract_quote_id_from_response_xml(response_xml)
+            if normalized_status == "Success" and not quote_id:
+                quote_id = None
+
+            return {
+                "jobBossRequestId": int(row.get("JobBossRequestId") or jobboss_request_id),
+                "status": normalized_status,
+                "lastError": last_error,
+                "jobBossQuoteId": quote_id,
+            }
+        except QuotePrepError:
+            raise
+        except Exception as exc:
+            raise QuotePrepDbError("Failed to load JobBOSS bridge request status.") from exc
         finally:
             cursor.close()
             connection.close()
@@ -191,9 +268,9 @@ ORDER BY br.BomRootId ASC;
         quote_add_fields: list[str] = []
         _append_xml_tag(quote_add_fields, "ID", "")
         _append_xml_tag(quote_add_fields, "Reference", _optional_text(intake_row.get("QuoteNumber")))
-        _append_xml_tag(quote_add_fields, "Status", "Active")
-        _append_xml_tag(quote_add_fields, "DueDate", _as_iso_date(intake_row.get("QuoteDueDate")))
         _append_xml_tag(quote_add_fields, "QuotedBy", _optional_text(intake_row.get("QuotedBy")))
+        _append_xml_tag(quote_add_fields, "DueDate", _as_iso_date(intake_row.get("QuoteDueDate")))
+        _append_xml_tag(quote_add_fields, "Status", "Active")
         _append_xml_tag(quote_add_fields, "CustomerRef", _optional_text(intake_row.get("CustomerName")))
         _append_xml_tag(quote_add_fields, "ContactRef", _optional_text(intake_row.get("ContactName")))
 
@@ -364,6 +441,59 @@ def _optional_text(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _first_existing_column(columns: set[str], *candidates: str) -> str | None:
+    for candidate in candidates:
+        if candidate in columns:
+            return candidate
+    return None
+
+
+def _normalize_bridge_status(value: str | None) -> str:
+    if value is None:
+        return "Queued"
+    normalized = value.strip().lower()
+    if normalized in {"queued", "pending", "ready", "new"}:
+        return "Queued"
+    if normalized in {"running", "in_progress", "processing", "working"}:
+        return "Running"
+    if normalized in {"success", "succeeded", "completed", "done"}:
+        return "Success"
+    if normalized in {"failed", "error", "dead", "aborted"}:
+        return "Failed"
+    return value.strip() or "Queued"
+
+
+def _extract_quote_id_from_response_xml(response_xml: str | None) -> str | None:
+    if not response_xml:
+        return None
+    try:
+        root = ET.fromstring(response_xml)
+    except ET.ParseError:
+        return None
+
+    for element in root.iter():
+        if _local_name(element.tag) == "QuoteAddRs":
+            for child in element.iter():
+                if _local_name(child.tag) == "ID":
+                    value = _optional_text(child.text)
+                    if value:
+                        return value
+    for element in root.iter():
+        if _local_name(element.tag) == "QuoteRet":
+            for child in element.iter():
+                if _local_name(child.tag) == "ID":
+                    value = _optional_text(child.text)
+                    if value:
+                        return value
+    return None
+
+
+def _local_name(tag: str) -> str:
+    if "}" in tag:
+        return tag.rsplit("}", 1)[1]
+    return tag
 
 
 def _normalize_quote_qty_breaks(value: str) -> str:

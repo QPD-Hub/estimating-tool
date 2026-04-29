@@ -292,6 +292,7 @@ class FakeQuotePrepService:
     def __init__(self) -> None:
         self.get_calls: list[int] = []
         self.save_calls: list[dict[str, object]] = []
+        self.status_calls: list[int] = []
 
     def get_quote_prep_candidates(self, bom_intake_id: int):
         self.get_calls.append(bom_intake_id)
@@ -315,6 +316,15 @@ class FakeQuotePrepService:
             }
         )
         return {"saved": True, "jobBossRequestId": 456}
+
+    def get_jobboss_request_status(self, jobboss_request_id: int) -> dict[str, object]:
+        self.status_calls.append(jobboss_request_id)
+        return {
+            "jobBossRequestId": jobboss_request_id,
+            "status": "Running",
+            "lastError": None,
+            "jobBossQuoteId": None,
+        }
 
 
 def _request_payload() -> dict[str, object]:
@@ -751,6 +761,30 @@ class WebBomIntakeApiTests(unittest.TestCase):
         self.assertEqual(json.loads(body), {"saved": True, "jobBossRequestId": 456})
         self.assertEqual(quote_prep_service.save_calls[0]["bom_intake_id"], 987)
         self.assertEqual(len(quote_prep_service.save_calls[0]["items"]), 2)
+
+    def test_quote_prep_bridge_status_endpoint_returns_status(self) -> None:
+        quote_prep_service = FakeQuotePrepService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                quote_prep_service_override=quote_prep_service,
+            )
+            status, headers, body = _invoke_get(
+                app,
+                "/api/quote-prep/bridge-status?jobboss_request_id=456",
+            )
+
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        payload = json.loads(body)
+        self.assertEqual(payload["jobBossRequestId"], 456)
+        self.assertEqual(payload["status"], "Running")
+        self.assertEqual(quote_prep_service.status_calls, [456])
 
     def test_customer_lookup_endpoint_returns_items(self) -> None:
         class FakeLookupService:
