@@ -277,9 +277,13 @@ ORDER BY br.BomRootId ASC;
     ) -> str:
         quote_add_fields: list[str] = []
         _append_xml_tag(quote_add_fields, "ID", "")
-        _append_xml_tag(quote_add_fields, "Reference", _optional_text(intake_row.get("QuoteNumber")))
-        _append_xml_tag(quote_add_fields, "QuotedBy", _optional_text(intake_row.get("QuotedBy")))
-        _append_xml_tag(quote_add_fields, "DueDate", _as_iso_date(intake_row.get("QuoteDueDate")))
+        _append_optional_xml_tag(
+            quote_add_fields, "Reference", _optional_text(intake_row.get("QuoteNumber"))
+        )
+        _append_optional_xml_tag(
+            quote_add_fields, "QuotedBy", _optional_text(intake_row.get("QuotedBy"))
+        )
+        _append_optional_xml_tag(quote_add_fields, "DueDate", _as_iso_date(intake_row.get("QuoteDueDate")))
         _append_xml_tag(quote_add_fields, "Status", "Active")
 
         quote_customer_fields: list[str] = []
@@ -292,15 +296,14 @@ ORDER BY br.BomRootId ASC;
         )
 
         line_xml_parts: list[str] = []
-        quoted_by = _optional_text(intake_row.get("QuotedBy"))
         for line in quote_lines:
             line_fields: list[str] = []
             _append_xml_tag(line_fields, "LineItemID", line["lineItemId"])
             _append_xml_tag(line_fields, "LineNumber", line["lineNumber"])
             _append_xml_tag(line_fields, "PartNumber", line["partNumber"])
-            _append_xml_tag(line_fields, "PartDescription", line["description"])
-            _append_xml_tag(line_fields, "PartRevision", line["revision"])
-            _append_xml_tag(line_fields, "QuotedBy", quoted_by)
+            _append_optional_xml_tag(line_fields, "PartDescription", line["description"])
+            _append_optional_xml_tag(line_fields, "PartRevision", line["revision"])
+            _append_xml_tag(line_fields, "UsePartMaster", "false")
             line_xml_parts.append(f"<QuoteLineItemAdd>{''.join(line_fields)}</QuoteLineItemAdd>")
 
             for qty in line["quantities"]:
@@ -584,6 +587,12 @@ def _append_xml_tag(parts: list[str], tag: str, value: str | None) -> None:
     if value is None:
         return
     parts.append(f"<{tag}>{xml_escape(value)}</{tag}>")
+
+
+def _append_optional_xml_tag(parts: list[str], tag: str, value: str | None) -> None:
+    if value is None or value.strip() == "":
+        return
+    _append_xml_tag(parts, tag, value)
 
 
 def _append_xml_ref_id_tag(parts: list[str], tag: str, value: str | None) -> None:

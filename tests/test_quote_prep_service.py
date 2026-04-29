@@ -1,4 +1,5 @@
 import unittest
+import xml.etree.ElementTree as ET
 
 from src.services.quote_prep_service import QuotePrepRequestError, QuotePrepService
 
@@ -110,32 +111,102 @@ class QuotePrepServiceValidationTests(unittest.TestCase):
         request_xml = fake_connection.cursor_obj.last_jobboss_params[9]
         self.assertIn('Session="{SESSION_ID}"', request_xml)
         self.assertIn("<QuoteAddRq>", request_xml)
-        self.assertIn(
-            "<QuoteAdd><ID></ID><Reference>Q-100</Reference><QuotedBy>estimator</QuotedBy><DueDate>2026-05-01</DueDate><Status>Active</Status></QuoteAdd>",
-            request_xml,
+        root = ET.fromstring(request_xml)
+        request_node = root.find("JBXMLRequest")
+        self.assertIsNotNone(request_node)
+        quote_add_rq = request_node.find("QuoteAddRq")
+        self.assertIsNotNone(quote_add_rq)
+
+        quote_add = quote_add_rq.find("QuoteAdd")
+        self.assertIsNotNone(quote_add)
+        self.assertEqual(
+            [child.tag for child in quote_add],
+            ["ID", "Reference", "QuotedBy", "DueDate", "Status"],
         )
-        self.assertIn(
-            '<QuoteSetUpCustomerInfo><CustomerRef ID="ACME" /><OverrideCreditLimit>false</OverrideCreditLimit><CountactRef ID="18" /></QuoteSetUpCustomerInfo>',
-            request_xml,
+        self.assertEqual(quote_add.findtext("ID"), "")
+        self.assertEqual(quote_add.findtext("Reference"), "Q-100")
+        self.assertEqual(quote_add.findtext("QuotedBy"), "estimator")
+        self.assertEqual(quote_add.findtext("DueDate"), "2026-05-01")
+        self.assertEqual(quote_add.findtext("Status"), "Active")
+
+        quote_setup = quote_add_rq.find("QuoteSetUpCustomerInfo")
+        self.assertIsNotNone(quote_setup)
+        self.assertEqual(
+            [child.tag for child in quote_setup],
+            ["CustomerRef", "OverrideCreditLimit", "CountactRef"],
         )
-        self.assertNotIn("<CustomerRef>ACME</CustomerRef>", request_xml)
-        self.assertNotIn("<ContactRef", request_xml)
-        self.assertLess(
-            request_xml.index('<CustomerRef ID="ACME" />'),
-            request_xml.index("<OverrideCreditLimit>false</OverrideCreditLimit>"),
+        self.assertEqual(quote_setup.find("CustomerRef").attrib.get("ID"), "ACME")
+        self.assertEqual(quote_setup.findtext("OverrideCreditLimit"), "false")
+        self.assertEqual(quote_setup.find("CountactRef").attrib.get("ID"), "18")
+
+        line_add = quote_add_rq.find("QuoteLineItemAdd")
+        self.assertIsNotNone(line_add)
+        self.assertEqual(
+            [child.tag for child in line_add],
+            [
+                "LineItemID",
+                "LineNumber",
+                "PartNumber",
+                "PartDescription",
+                "PartRevision",
+                "UsePartMaster",
+            ],
         )
-        self.assertLess(
-            request_xml.index("<OverrideCreditLimit>false</OverrideCreditLimit>"),
-            request_xml.index('<CountactRef ID="18" />'),
-        )
-        self.assertLess(
-            request_xml.index("</QuoteSetUpCustomerInfo>"),
-            request_xml.index("<QuoteLineItemAdd>"),
-        )
-        self.assertIn("<LineItemID>001</LineItemID>", request_xml)
+        self.assertEqual(line_add.findtext("LineItemID"), "001")
+        self.assertEqual(line_add.findtext("LineNumber"), "001")
+        self.assertEqual(line_add.findtext("PartNumber"), "ASM-1000")
+        self.assertEqual(line_add.findtext("PartDescription"), "Top Assembly")
+        self.assertEqual(line_add.findtext("PartRevision"), "A")
+        self.assertEqual(line_add.findtext("UsePartMaster"), "false")
+        self.assertIsNone(line_add.find("QuotedBy"))
+
+        qty_add = quote_add_rq.find("QuoteQuantityAdd")
+        self.assertIsNotNone(qty_add)
+        self.assertEqual([child.tag for child in qty_add], ["LineItemID", "QuotedQuantity"])
+        self.assertEqual(qty_add.findtext("LineItemID"), "001")
+        self.assertEqual(qty_add.findtext("QuotedQuantity"), "1")
+
         self.assertEqual(fake_connection.cursor_obj.last_jobboss_params[11], "uploader")
         self.assertTrue(
             any("JobBOSS QuoteAddRq preview XML:" in message for message in captured_logs.output)
+        )
+
+    def test_quote_builder_omits_blank_optional_elements(self) -> None:
+        service = QuotePrepService.__new__(QuotePrepService)
+        xml_text = service._build_quote_add_xml(
+            intake_row={
+                "QuoteNumber": "Q-200",
+                "QuotedBy": " ",
+                "QuoteDueDate": None,
+                "CustomerName": "ACME",
+            },
+            quote_lines=[
+                {
+                    "lineItemId": "001",
+                    "lineNumber": "001",
+                    "partNumber": "0241-75453",
+                    "description": "",
+                    "revision": "",
+                    "quantities": [1],
+                }
+            ],
+            contact_ref_id=None,
+        )
+
+        root = ET.fromstring(xml_text)
+        quote_add_rq = root.find("./JBXMLRequest/QuoteAddRq")
+        self.assertIsNotNone(quote_add_rq)
+
+        quote_add = quote_add_rq.find("QuoteAdd")
+        self.assertEqual([child.tag for child in quote_add], ["ID", "Reference", "Status"])
+
+        quote_setup = quote_add_rq.find("QuoteSetUpCustomerInfo")
+        self.assertEqual([child.tag for child in quote_setup], ["CustomerRef", "OverrideCreditLimit"])
+
+        line_add = quote_add_rq.find("QuoteLineItemAdd")
+        self.assertEqual(
+            [child.tag for child in line_add],
+            ["LineItemID", "LineNumber", "PartNumber", "UsePartMaster"],
         )
 
 
