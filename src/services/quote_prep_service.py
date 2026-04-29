@@ -295,7 +295,8 @@ ORDER BY br.BomRootId ASC;
             quote_customer_fields, "CountactRef", contact_ref_id
         )
 
-        line_xml_parts: list[str] = []
+        line_add_parts: list[str] = []
+        quantity_add_parts: list[str] = []
         for line in quote_lines:
             line_fields: list[str] = []
             _append_xml_tag(line_fields, "LineItemID", line["lineItemId"])
@@ -304,13 +305,13 @@ ORDER BY br.BomRootId ASC;
             _append_optional_xml_tag(line_fields, "PartDescription", line["description"])
             _append_optional_xml_tag(line_fields, "PartRevision", line["revision"])
             _append_xml_tag(line_fields, "UsePartMaster", "false")
-            line_xml_parts.append(f"<QuoteLineItemAdd>{''.join(line_fields)}</QuoteLineItemAdd>")
+            line_add_parts.append(f"<QuoteLineItemAdd>{''.join(line_fields)}</QuoteLineItemAdd>")
 
             for qty in line["quantities"]:
                 qty_fields: list[str] = []
                 _append_xml_tag(qty_fields, "LineItemID", line["lineItemId"])
                 _append_xml_tag(qty_fields, "QuotedQuantity", str(qty))
-                line_xml_parts.append(f"<QuoteQuantityAdd>{''.join(qty_fields)}</QuoteQuantityAdd>")
+                quantity_add_parts.append(f"<QuoteQuantityAdd>{''.join(qty_fields)}</QuoteQuantityAdd>")
 
         return (
             "<JBXML>"
@@ -318,7 +319,8 @@ ORDER BY br.BomRootId ASC;
             "<QuoteAddRq>"
             f"<QuoteAdd>{''.join(quote_add_fields)}</QuoteAdd>"
             f"<QuoteSetUpCustomerInfo>{''.join(quote_customer_fields)}</QuoteSetUpCustomerInfo>"
-            f"{''.join(line_xml_parts)}"
+            f"{''.join(line_add_parts)}"
+            f"{''.join(quantity_add_parts)}"
             "</QuoteAddRq>"
             "</JBXMLRequest>"
             "</JBXML>"
