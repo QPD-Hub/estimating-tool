@@ -115,18 +115,18 @@ class QuotePrepServiceValidationTests(unittest.TestCase):
             request_xml,
         )
         self.assertIn(
-            '<QuoteSetUpCustomerInfo><CustomerRef ID="ACME" /><OverrideCreditLimit>false</OverrideCreditLimit><ContactRef ID="18" /></QuoteSetUpCustomerInfo>',
+            '<QuoteSetUpCustomerInfo><CustomerRef ID="ACME" /><OverrideCreditLimit>false</OverrideCreditLimit><CountactRef ID="18" /></QuoteSetUpCustomerInfo>',
             request_xml,
         )
         self.assertNotIn("<CustomerRef>ACME</CustomerRef>", request_xml)
-        self.assertNotIn('<ContactRef ID="Alice" />', request_xml)
+        self.assertNotIn("<ContactRef", request_xml)
         self.assertLess(
             request_xml.index('<CustomerRef ID="ACME" />'),
             request_xml.index("<OverrideCreditLimit>false</OverrideCreditLimit>"),
         )
         self.assertLess(
             request_xml.index("<OverrideCreditLimit>false</OverrideCreditLimit>"),
-            request_xml.index('<ContactRef ID="18" />'),
+            request_xml.index('<CountactRef ID="18" />'),
         )
         self.assertLess(
             request_xml.index("</QuoteSetUpCustomerInfo>"),

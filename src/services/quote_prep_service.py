@@ -288,7 +288,7 @@ ORDER BY br.BomRootId ASC;
         )
         _append_xml_tag(quote_customer_fields, "OverrideCreditLimit", "false")
         _append_xml_ref_id_tag(
-            quote_customer_fields, "ContactRef", contact_ref_id
+            quote_customer_fields, "CountactRef", contact_ref_id
         )
 
         line_xml_parts: list[str] = []
