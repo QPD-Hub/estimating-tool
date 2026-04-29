@@ -95,10 +95,11 @@ class QuotePrepServiceValidationTests(unittest.TestCase):
         service._connect = lambda **kwargs: fake_connection
         service._connection_kwargs = lambda: {}
 
-        result = service.save_quote_prep(
-            987,
-            [{"bomRootId": 1, "includeInQuote": True, "quoteQtyBreaks": "1,5,10"}],
-        )
+        with self.assertLogs("src.services.quote_prep_service", level="INFO") as captured_logs:
+            result = service.save_quote_prep(
+                987,
+                [{"bomRootId": 1, "includeInQuote": True, "quoteQtyBreaks": "1,5,10"}],
+            )
 
         self.assertEqual(result["saved"], True)
         self.assertEqual(result["jobBossRequestId"], 321)
@@ -107,10 +108,21 @@ class QuotePrepServiceValidationTests(unittest.TestCase):
         self.assertIn('Session="{SESSION_ID}"', request_xml)
         self.assertIn("<QuoteAddRq>", request_xml)
         self.assertIn(
-            "<QuoteAdd><ID></ID><Reference>Q-100</Reference><QuotedBy>estimator</QuotedBy><DueDate>2026-05-01</DueDate><Status>Active</Status><CustomerRef>ACME</CustomerRef><ContactRef>Alice</ContactRef></QuoteAdd>",
+            "<QuoteAdd><ID></ID><Reference>Q-100</Reference><QuotedBy>estimator</QuotedBy><DueDate>2026-05-01</DueDate><Status>Active</Status></QuoteAdd>",
             request_xml,
         )
+        self.assertIn(
+            "<QuoteSetUpCustomerInfo><CustomerRef>ACME</CustomerRef><ContactRef>Alice</ContactRef></QuoteSetUpCustomerInfo>",
+            request_xml,
+        )
+        self.assertLess(
+            request_xml.index("</QuoteSetUpCustomerInfo>"),
+            request_xml.index("<QuoteLineItemAdd>"),
+        )
         self.assertIn("<LineItemID>001</LineItemID>", request_xml)
+        self.assertTrue(
+            any("JobBOSS QuoteAddRq preview XML:" in message for message in captured_logs.output)
+        )
 
 
 if __name__ == "__main__":

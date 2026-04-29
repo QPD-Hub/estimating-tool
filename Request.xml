@@ -1,0 +1,442 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- edited with XMLSPY v5 U (http://www.xmlspy.com) by Alek Portnov (N/A) -->
+<JBXML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="C:\develop\Dev\D5\JB2K\Wrapper\JBXML.xsd">
+	<JBXMLRequest Session="432453535666767688999000">
+		<CustomerAddRq>
+			<CustomerAdd>
+				<ID>C00100</ID>
+				<Name>Tester Customer</Name>
+				<PartnerSince>2002-10-23</PartnerSince>
+				<LeadDays>3</LeadDays>
+				<URL>www.teste.com</URL>
+				<EMailAddress>tester@tester.com</EMailAddress>
+				<CreditLimit>34</CreditLimit>
+				<SalesRepRef ID="DAVE"/>
+				<TradingCurrencyRef ID="1"/>
+				<TermsCodeRef ID="2% 10 Net 30"/>
+				<TaxCodeRef ID="Minn/Mpls"/>
+				<ShipViaRef ID="UPS"/>
+				<UserValues>
+					<Date1>2002-10-01</Date1>
+					<Date2>2002-10-02</Date2>
+					<Text1>test</Text1>
+					<Text2/>
+					<Decimal1>3.0</Decimal1>
+				</UserValues>
+			</CustomerAdd>
+			<AddressAdd>
+				<AddressName>Home</AddressName>
+				<Line1>SomeWhere </Line1>
+				<Line2>Some Street</Line2>
+				<City>Eagan</City>
+				<State>MN</State>
+				<PostalCode>55122</PostalCode>
+				<Country>USA</Country>
+				<Shippable>true</Shippable>
+			</AddressAdd>
+			<ContactAdd>
+				<Name>Alex </Name>
+				<PhoneNumber>86878788</PhoneNumber>
+				<PhoneExtension>789</PhoneExtension>
+				<Fax>678 2233 222</Fax>
+				<EMailAddress>contact@somewhere.com</EMailAddress>
+			</ContactAdd>
+		</CustomerAddRq>
+		<CustomerQueryRq>
+			<CustomerQueryFilter>
+				<ID>C0010</ID>
+				<IncludeAddressDetails>true</IncludeAddressDetails>
+				<IncludeContacts>true</IncludeContacts>
+				<IncludeStartUpDocuments>true</IncludeStartUpDocuments>
+			</CustomerQueryFilter>
+		</CustomerQueryRq>
+		<CustomerListQueryRq>
+			<QueryFilter>
+				<IDFilter>C0%</IDFilter>
+			</QueryFilter>
+		</CustomerListQueryRq>
+		<VendorAddRq>
+			<VendorAdd>
+				<ID>V00100</ID>
+				<Name>XML Test</Name>
+				<PartnerSince>2002-10-28</PartnerSince>
+				<LeadDays>4</LeadDays>
+				<URL>www.tester.com</URL>
+				<EMailAddress>tester@tester.com</EMailAddress>
+				<Status>Active</Status>
+				<AccountNbr>567892</AccountNbr>
+				<TermsCodeRef ID="Due On Receipt"/>
+				<ShipViaRef ID="UPS"/>
+				<UserValues>
+					<Date2>2002-10-01</Date2>
+					<Decimal1>4.6</Decimal1>
+				</UserValues>
+			</VendorAdd>
+			<AddressAdd>
+				<AddressName>Home</AddressName>
+				<Line1>Some Where</Line1>
+				<State>MN</State>
+				<PostalCode>55122</PostalCode>
+				<Country>USA</Country>
+			</AddressAdd>
+			<ContactAdd>
+				<Name>Alex Tester</Name>
+				<Title>Boss</Title>
+				<EMailAddress>alex@tester.com</EMailAddress>
+			</ContactAdd>
+			<ContactAdd>
+				<Name>John Smith</Name>
+				<EMailAddress>john@tester.com</EMailAddress>
+			</ContactAdd>
+			<ServiceContractAdd>
+				<ServiceRef ID="HEAT"/>
+				<MinimumCharge>45.89</MinimumCharge>
+				<LeadDays>56</LeadDays>
+			</ServiceContractAdd>
+			<VendStartUpDocAdd>
+				<DocumentNbr>TestDoc</DocumentNbr>
+				<OriginalAmount>34</OriginalAmount>
+				<DocumentDate>2002-01-10</DocumentDate>
+			</VendStartUpDocAdd>
+		</VendorAddRq>
+		<VendorQueryRq>
+			<VendorQueryFilter>
+				<ID>V0010</ID>
+				<IncludeAddressDetails>true</IncludeAddressDetails>
+				<IncludeContacts>true</IncludeContacts>
+				<IncludeStartUpDocuments>true</IncludeStartUpDocuments>
+			</VendorQueryFilter>
+		</VendorQueryRq>
+		<VendorListQueryRq>
+			<QueryFilter>
+				<IDFilter>V001</IDFilter>
+			</QueryFilter>
+		</VendorListQueryRq>
+		<ServiceOperationAddRq>
+			<ServiceOperationAdd>
+				<ID>SO00100</ID>
+				<Description>Just Some Test Service</Description>
+				<LeadDays>39</LeadDays>
+				<DefaultMinCharge>67.99</DefaultMinCharge>
+				<Notes>Something to test notes</Notes>
+				<UserValues>
+					<Text1>test1</Text1>
+					<Text2>test2</Text2>
+				</UserValues>
+			</ServiceOperationAdd>
+			<ServiceContractAdd>
+				<ServiceRef ID="V0010"/>
+				<MinimumCharge>4.88</MinimumCharge>
+				<LeadDays>12</LeadDays>
+			</ServiceContractAdd>
+		</ServiceOperationAddRq>
+		<ServiceOperationQueryRq>
+			<ServiceOperationQueryFilter>
+				<ID>SO0010</ID>
+				<IncludeContracts>true</IncludeContracts>
+			</ServiceOperationQueryFilter>
+		</ServiceOperationQueryRq>
+		<ServiceOperationListQueryRq>
+			<QueryFilter>
+				<IDFilter>SO0010</IDFilter>
+			</QueryFilter>
+		</ServiceOperationListQueryRq>
+		<WorkCenterAddRq>
+			<WorkCenterAdd>
+				<ID>WC00100</ID>
+				<LinkMaterial>true</LinkMaterial>
+				<Type>Direct</Type>
+				<DepartmentRef ID="Engineering"/>
+				<Capacity>
+					<LimitingResources>12</LimitingResources>
+					<SchedulingHours>5</SchedulingHours>
+					<QueuHours>22</QueuHours>
+				</Capacity>
+				<BurdenCosts>
+					<LaborBurdenRate>5</LaborBurdenRate>
+					<MachineBurdenRate>2</MachineBurdenRate>
+					<GABurdenRate>9</GABurdenRate>
+				</BurdenCosts>
+				<LaborCosts>
+					<SetUpLaborRate>4</SetUpLaborRate>
+					<RunLaborRate>5</RunLaborRate>
+				</LaborCosts>
+				<UserValues>
+					<Date1>2002-10-30</Date1>
+					<Text2>Sometest</Text2>
+				</UserValues>
+			</WorkCenterAdd>
+		</WorkCenterAddRq>
+		<WorkCenterQueryRq>
+			<WorkCenterQueryFilter>
+				<ID>WC0010</ID>
+			</WorkCenterQueryFilter>
+		</WorkCenterQueryRq>
+		<WorkCenterListQueryRq>
+			<QueryFilter>
+				<IDFilter>WC0010</IDFilter>
+			</QueryFilter>
+		</WorkCenterListQueryRq>
+		<MaterialAddRq>
+			<MaterialAdd>
+				<ID>XML Material 01400</ID>
+				<MaterialType>R</MaterialType>
+				<Description>Something new</Description>
+				<VendorReferenceNbr>Just a ref</VendorReferenceNbr>
+				<DefaultSource>B</DefaultSource>
+				<StandardCost>34.9</StandardCost>
+				<LastCost>5.9</LastCost>
+				<GLAccountID>120</GLAccountID>
+				<VendorRef ID="ABLE"/>
+				<DefaultLocationRef ID="SHOP"/>
+				<MaterialClassRef ID="Alum"/>
+				<SalesCodeRef ID="Engineering Svc"/>
+				<UserValues>
+					<Date1>2002-10-10</Date1>
+					<Text2>something</Text2>
+				</UserValues>
+			</MaterialAdd>
+			<SetShape>
+				<ShapeName>Round</ShapeName>
+			</SetShape>
+			<AssignUnits>
+				<StockUnit>ft</StockUnit>
+				<PurchaseUnit>ft</PurchaseUnit>
+				<CostUnit>ft</CostUnit>
+				<PriceUnit>ft</PriceUnit>
+			</AssignUnits>
+			<EditAlloy>
+				<AlloyID>2017</AlloyID>
+			</EditAlloy>
+			<AddOnHandQty>
+				<LocationRef ID="SHOP"/>
+				<Quantity>45</Quantity>
+			</AddOnHandQty>
+			<AddOnHandQty>
+				<LocationRef ID="D-16"/>
+				<Quantity>34</Quantity>
+			</AddOnHandQty>
+		</MaterialAddRq>
+		<MaterialAddRq>
+			<MaterialAdd>
+				<ID>XML Material 01500</ID>
+				<MaterialType>F</MaterialType>
+				<Description>New Disc Item</Description>
+				<VendorReferenceNbr>Some VR</VendorReferenceNbr>
+				<DefaultSource>B</DefaultSource>
+				<Status>Active</Status>
+				<StandardCost>123.89</StandardCost>
+				<LastCost>78.99</LastCost>
+				<LeadDays>7</LeadDays>
+				<GLAccountID>120</GLAccountID>
+				<VendorRef ID="ACC"/>
+				<DefaultLocationRef ID="L-WEST"/>
+			</MaterialAdd>
+			<AssignRole>
+				<RoleType>H</RoleType>
+			</AssignRole>
+			<AssignUnits>
+				<StockUnit>ea</StockUnit>
+				<PurchaseUnit>ea</PurchaseUnit>
+				<CostUnit>ea</CostUnit>
+				<PriceUnit>ea</PriceUnit>
+			</AssignUnits>
+			<SetRevInformation>
+				<Revision>2</Revision>
+				<Drawing>333</Drawing>
+			</SetRevInformation>
+			<AddOnHandQty>
+				<LocationRef ID="SHOP"/>
+				<Quantity>45</Quantity>
+			</AddOnHandQty>
+			<CustomerPartAdd>
+				<CustomerRef ID="AMD"/>
+				<TheirPartNumber>Test Part</TheirPartNumber>
+				<TheirDescription>Some Stuff</TheirDescription>
+			</CustomerPartAdd>
+		</MaterialAddRq>
+		<MaterialQueryRq>
+			<MaterialQueryFilter>
+				<ID>XML Material 0140</ID>
+				<IncludeMaterialLocations>true</IncludeMaterialLocations>
+				<IncludeCustomerParts>true</IncludeCustomerParts>
+				<IncludePriceBreaks>true</IncludePriceBreaks>
+			</MaterialQueryFilter>
+		</MaterialQueryRq>
+		<MaterialListQueryRq>
+			<QueryFilter>
+				<IDFilter>XML Material 001%</IDFilter>
+			</QueryFilter>
+		</MaterialListQueryRq>
+		<JobAddRq>
+			<JobAdd>
+				<ID>J0050</ID>
+				<BuildtoStock>true</BuildtoStock>
+				<CustomerPO>Some PO</CustomerPO>
+				<CustomerPOLine>345</CustomerPOLine>
+				<Quote>Q4566</Quote>
+				<Priority>4</Priority>
+				<CertsReqd>true</CertsReqd>
+				<LeadDays>77</LeadDays>
+				<OrderDate>2002-11-12</OrderDate>
+				<OrderQty>100</OrderQty>
+				<ShipViaRef ID="UPS"/>
+			</JobAdd>
+			<SetUpCustomerInfo>
+				<CustomerRef ID="HON"/>
+				<OverrideCreditLimit>true</OverrideCreditLimit>
+				<CountactRef ID="18"/>
+				<TaxCodeRef ID="Minn"/>
+			</SetUpCustomerInfo>
+			<PartSpecification>
+				<PartNumber>HINGE 2.5 X 6</PartNumber>
+				<Description>Just a test</Description>
+				<Revision>6.9</Revision>
+			</PartSpecification>
+			<BuildQuantities>
+				<ExtraQuantity>45</ExtraQuantity>
+				<PickQty>23</PickQty>
+			</BuildQuantities>
+			<SetPriceInfo>
+				<UnitPrice>56.88</UnitPrice>
+				<PriceUofM>ea</PriceUofM>
+			</SetPriceInfo>
+			<AdditionalChargeAdd>
+				<Amount>50</Amount>
+				<Description>Just a charge</Description>
+				<Taxable>true</Taxable>
+				<Commissionable>true</Commissionable>
+				<JobRevenue>true</JobRevenue>
+				<SalesCodeRef ID="Tooling charge"/>
+			</AdditionalChargeAdd>
+			<DeliveryAdd>
+				<RequestedDate>2002-11-11</RequestedDate>
+				<PromisedDate>2002-12-10</PromisedDate>
+				<PromisedQuantity>67</PromisedQuantity>
+			</DeliveryAdd>
+			<RouteAddFromWorkCenter>
+				<WorkCenterRef ID="DESIGN"/>
+				<InsideRouteProperties>
+					<Operation>Test</Operation>
+					<Description>Just a test Operation</Description>
+					<PercentAttended>90</PercentAttended>
+					<SetUpCalculator>
+						<Hours>10</Hours>
+					</SetUpCalculator>
+					<RunTimeCalculator>
+						<RunMethod>Parts/Hr</RunMethod>
+						<Run>7</Run>
+						<Efficiency>90</Efficiency>
+					</RunTimeCalculator>
+					<OverlapSpecifier>
+						<Method>Pct</Method>
+						<Overlap>2</Overlap>
+					</OverlapSpecifier>
+				</InsideRouteProperties>
+			</RouteAddFromWorkCenter>
+			<RouteAddFromOperation>
+				<OperationRef ID="SAND 180"/>
+				<InsideRouteProperties>
+					<Description>Some Operation</Description>
+					<Priority>3</Priority>
+					<PercentAttended>95</PercentAttended>
+					<SetUpCalculator>
+						<Hours>11</Hours>
+					</SetUpCalculator>
+					<RunTimeCalculator>
+						<RunMethod>FixedHrs</RunMethod>
+						<Run>32</Run>
+						<Efficiency>78</Efficiency>
+					</RunTimeCalculator>
+				</InsideRouteProperties>
+			</RouteAddFromOperation>
+			<RouteAddFromService>
+				<ServiceRef ID="HEAT"/>
+				<VendorRef ID="ABLE"/>
+				<OutsideRouteProperties>
+					<Description>Just some stuff</Description>
+					<UnitCost>45</UnitCost>
+					<CostUnit>ea</CostUnit>
+					<PurchaseUnit>ea</PurchaseUnit>
+					<ConversionFactor>1</ConversionFactor>
+					<LeadDays>6</LeadDays>
+					<CertsReqd>true</CertsReqd>
+					<MinimumCharge>78</MinimumCharge>
+					<AdditionalCost>
+						<Description>Packing Charge</Description>
+						<Amount>50</Amount>
+					</AdditionalCost>
+				</OutsideRouteProperties>
+			</RouteAddFromService>
+			<InsertRouteFromService>
+				<ServiceRef ID="PAINT"/>
+				<VendorRef ID="CIS"/>
+				<Sequence>1</Sequence>
+				<OutsideRouteProperties>
+					<Description>stuff</Description>
+					<UnitCost>90</UnitCost>
+				</OutsideRouteProperties>
+			</InsertRouteFromService>
+			<MaterialRequirementAdd>
+				<MaterialRef ID="121-020-102"/>
+				<DefaultSource>P</DefaultSource>
+				<RequirementProperties>
+					<VendorReference>Some ref</VendorReference>
+					<CertsReqd>true</CertsReqd>
+					<Quantity>234</Quantity>
+					<UnitPrice>123.33</UnitPrice>
+					<LeadDays>4</LeadDays>
+					<VendorRef ID="ABLE"/>
+					<AdditionalCost>
+						<Description>Freight</Description>
+						<Amount>8.99</Amount>
+					</AdditionalCost>
+				</RequirementProperties>
+			</MaterialRequirementAdd>
+			<MiscMaterialRequirementAdd>
+				<MaterialRef ID="Just Item"/>
+				<Description>Something to test</Description>
+				<RequirementProperties>
+					<VendorReference>Misc One</VendorReference>
+					<CertsReqd>true</CertsReqd>
+					<Quantity>56</Quantity>
+					<UnitOfMeasure>ft</UnitOfMeasure>
+					<UnitPrice>78</UnitPrice>
+					<LeadDays>8</LeadDays>
+				</RequirementProperties>
+			</MiscMaterialRequirementAdd>
+		</JobAddRq>
+		<JobQueryRq>
+			<JobQueryFilter>
+				<ID>J003</ID>
+				<IncludeAdditionalCharges>true</IncludeAdditionalCharges>
+				<IncludeDeliveries>true</IncludeDeliveries>
+				<IncludeRoutingLines>true</IncludeRoutingLines>
+				<IncludeMaterialRequirements>true</IncludeMaterialRequirements>
+				<IncludeComponents>true</IncludeComponents>
+			</JobQueryFilter>
+		</JobQueryRq>
+		<JobListQueryRq>
+			<QueryFilter>
+				<IDFilter>J003</IDFilter>
+			</QueryFilter>
+		</JobListQueryRq>
+		<LocationListQueryRq>
+			<SimpleQueryFilter>
+				<IDFilter/>
+			</SimpleQueryFilter>
+		</LocationListQueryRq>
+		<DepartmentRefListQueryRq>
+			<SimpleQueryFilter/>
+		</DepartmentRefListQueryRq>
+		<CustomerTypeListQueryRq>
+			<SimpleQueryFilter/>
+		</CustomerTypeListQueryRq>
+		<CurrencyListQueryRq>
+			<SimpleQueryFilter/>
+		</CurrencyListQueryRq>
+		<StandardTextListQueryRq>
+			<SimpleQueryFilter/>
+		</StandardTextListQueryRq>
+	</JBXMLRequest>
+</JBXML>

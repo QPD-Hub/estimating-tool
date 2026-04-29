@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import xml.etree.ElementTree as ET
 from datetime import date, datetime
 from typing import Any, Callable
@@ -10,6 +11,8 @@ from xml.sax.saxutils import escape as xml_escape
 
 from src.config import SqlServerConfig
 from src.services.bom_intake_db import _load_pymssql_connect
+
+logger = logging.getLogger(__name__)
 
 
 class QuotePrepError(ValueError):
@@ -178,6 +181,7 @@ WHERE JobBossRequestId = %s;
         )
         quote_lines = self._build_quote_lines(included_roots)
         request_xml = self._build_quote_add_xml(intake_row, quote_lines)
+        logger.info("JobBOSS QuoteAddRq preview XML: %s", request_xml)
         payload_json = self._build_payload_json(
             bom_intake_id=bom_intake_id,
             intake_row=intake_row,
@@ -271,8 +275,10 @@ ORDER BY br.BomRootId ASC;
         _append_xml_tag(quote_add_fields, "QuotedBy", _optional_text(intake_row.get("QuotedBy")))
         _append_xml_tag(quote_add_fields, "DueDate", _as_iso_date(intake_row.get("QuoteDueDate")))
         _append_xml_tag(quote_add_fields, "Status", "Active")
-        _append_xml_tag(quote_add_fields, "CustomerRef", _optional_text(intake_row.get("CustomerName")))
-        _append_xml_tag(quote_add_fields, "ContactRef", _optional_text(intake_row.get("ContactName")))
+
+        quote_customer_fields: list[str] = []
+        _append_xml_tag(quote_customer_fields, "CustomerRef", _optional_text(intake_row.get("CustomerName")))
+        _append_xml_tag(quote_customer_fields, "ContactRef", _optional_text(intake_row.get("ContactName")))
 
         line_xml_parts: list[str] = []
         quoted_by = _optional_text(intake_row.get("QuotedBy"))
@@ -297,6 +303,7 @@ ORDER BY br.BomRootId ASC;
             '<JBXMLRequest Session="{SESSION_ID}">'
             "<QuoteAddRq>"
             f"<QuoteAdd>{''.join(quote_add_fields)}</QuoteAdd>"
+            f"<QuoteSetUpCustomerInfo>{''.join(quote_customer_fields)}</QuoteSetUpCustomerInfo>"
             f"{''.join(line_xml_parts)}"
             "</QuoteAddRq>"
             "</JBXMLRequest>"
