@@ -307,13 +307,14 @@ class FakeQuotePrepService:
             }
         ]
 
-    def save_quote_prep(self, bom_intake_id: int, items: list[dict[str, object]]) -> None:
+    def save_quote_prep(self, bom_intake_id: int, items: list[dict[str, object]]) -> dict[str, object]:
         self.save_calls.append(
             {
                 "bom_intake_id": bom_intake_id,
                 "items": items,
             }
         )
+        return {"saved": True, "jobBossRequestId": 456}
 
 
 def _request_payload() -> dict[str, object]:
@@ -747,7 +748,7 @@ class WebBomIntakeApiTests(unittest.TestCase):
 
         self.assertEqual(status, "200 OK")
         self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
-        self.assertEqual(json.loads(body), {"saved": True})
+        self.assertEqual(json.loads(body), {"saved": True, "jobBossRequestId": 456})
         self.assertEqual(quote_prep_service.save_calls[0]["bom_intake_id"], 987)
         self.assertEqual(len(quote_prep_service.save_calls[0]["items"]), 2)
 

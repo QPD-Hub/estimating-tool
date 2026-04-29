@@ -813,8 +813,8 @@ def _handle_quote_prep_save(
             raise ValueError("bomIntakeId must be a positive integer.")
         if not isinstance(items, list):
             raise ValueError("items must be an array.")
-        quote_prep_service.save_quote_prep(bom_intake_id_raw, items)
-        return _respond_json(start_response, {"saved": True}, status=HTTPStatus.OK)
+        result = quote_prep_service.save_quote_prep(bom_intake_id_raw, items)
+        return _respond_json(start_response, result, status=HTTPStatus.OK)
     except (ValueError, QuotePrepRequestError) as exc:
         return _respond_json(
             start_response,
@@ -1093,7 +1093,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
           </table>
         </div>
         <div class="actions">
-          <button type="button" id="save-quote-prep">Save Quote Prep</button>
+          <button type="button" id="save-quote-prep">Create JB Quote</button>
           <span class="status-line" id="quote-prep-status"></span>
         </div>
       </section>
@@ -1883,7 +1883,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
           if (!response.ok) {{
             throw new Error(payload && payload.error ? payload.error : "Unable to save quote prep decisions.");
           }}
-          statusEl.textContent = "Quote prep saved.";
+          statusEl.textContent = "JobBOSS quote request queued.";
         }} catch (err) {{
           const message = err instanceof Error ? err.message : "Unable to save quote prep decisions.";
           showQuotePrepError(message);
