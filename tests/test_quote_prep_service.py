@@ -112,14 +112,17 @@ class QuotePrepServiceValidationTests(unittest.TestCase):
             request_xml,
         )
         self.assertIn(
-            "<QuoteSetUpCustomerInfo><CustomerRef>ACME</CustomerRef><ContactRef>Alice</ContactRef></QuoteSetUpCustomerInfo>",
+            '<QuoteSetUpCustomerInfo><CustomerRef ID="ACME" /><ContactRef ID="Alice" /></QuoteSetUpCustomerInfo>',
             request_xml,
         )
+        self.assertNotIn("<CustomerRef>ACME</CustomerRef>", request_xml)
+        self.assertNotIn("<ContactRef>Alice</ContactRef>", request_xml)
         self.assertLess(
             request_xml.index("</QuoteSetUpCustomerInfo>"),
             request_xml.index("<QuoteLineItemAdd>"),
         )
         self.assertIn("<LineItemID>001</LineItemID>", request_xml)
+        self.assertEqual(fake_connection.cursor_obj.last_jobboss_params[11], "uploader")
         self.assertTrue(
             any("JobBOSS QuoteAddRq preview XML:" in message for message in captured_logs.output)
         )

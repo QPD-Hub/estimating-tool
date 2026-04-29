@@ -277,8 +277,12 @@ ORDER BY br.BomRootId ASC;
         _append_xml_tag(quote_add_fields, "Status", "Active")
 
         quote_customer_fields: list[str] = []
-        _append_xml_tag(quote_customer_fields, "CustomerRef", _optional_text(intake_row.get("CustomerName")))
-        _append_xml_tag(quote_customer_fields, "ContactRef", _optional_text(intake_row.get("ContactName")))
+        _append_xml_ref_id_tag(
+            quote_customer_fields, "CustomerRef", _optional_text(intake_row.get("CustomerName"))
+        )
+        _append_xml_ref_id_tag(
+            quote_customer_fields, "ContactRef", _optional_text(intake_row.get("ContactName"))
+        )
 
         line_xml_parts: list[str] = []
         quoted_by = _optional_text(intake_row.get("QuotedBy"))
@@ -341,8 +345,8 @@ ORDER BY br.BomRootId ASC;
     ) -> int:
         lines_hash = _hash_included_lines(quote_lines)
         requested_by = (
-            _optional_text(intake_row.get("QuotedBy"))
-            or _optional_text(intake_row.get("UploadedBy"))
+            _optional_text(intake_row.get("UploadedBy"))
+            or _optional_text(intake_row.get("QuotedBy"))
             or "system"
         )
         correlation_id = str(uuid4())
@@ -533,6 +537,12 @@ def _append_xml_tag(parts: list[str], tag: str, value: str | None) -> None:
     if value is None:
         return
     parts.append(f"<{tag}>{xml_escape(value)}</{tag}>")
+
+
+def _append_xml_ref_id_tag(parts: list[str], tag: str, value: str | None) -> None:
+    if value is None:
+        return
+    parts.append(f'<{tag} ID="{xml_escape(value)}" />')
 
 
 def _as_iso_date(value: object) -> str | None:
