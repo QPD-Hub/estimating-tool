@@ -899,6 +899,54 @@ class WebBomIntakeApiTests(unittest.TestCase):
         self.assertEqual(status, "200 OK")
         self.assertIn('id="contact_name"', body)
         self.assertIn('id="contact_name" name="contact_name" type="text" list="contact_suggestions" value="" disabled', body)
+        self.assertIn('id="contact_lookup_warning" class="status-line hidden"', body)
+        self.assertIn("window.addEventListener(\"load\", initializeContactLookup);", body)
+        self.assertIn("window.setTimeout(initializeContactLookup, 0);", body)
+
+    def test_root_post_keeps_contact_enabled_when_customer_prefilled(self) -> None:
+        class FakeLookupService:
+            def list_customers(self, search):
+                return []
+
+            def list_contacts(self, customer, search):
+                return []
+
+            def contact_belongs_to_customer(self, contact_name, customer):
+                return True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                AppConfig(
+                    app_env="test",
+                    automation_drop_root=Path(temp_dir) / "automation",
+                    work_root=Path(temp_dir) / "work",
+                    port=8000,
+                ),
+                bom_intake_service_override=FakeBomIntakeService(),
+                lookup_service_override=FakeLookupService(),
+            )
+
+            status, headers, body = _invoke_multipart(
+                app,
+                "/",
+                fields={
+                    "customer": "AMAT",
+                    "rfq_number": "Q-100",
+                    "uploaded_by": "estimator",
+                    "quoted_by": "",
+                    "contact_name": "",
+                    "quote_due_date": "2026-05-01",
+                },
+                file_field_name="documents",
+                filename="bom.xlsx",
+                content=b"fake workbook bytes",
+            )
+
+        self.assertEqual(status, "400 Bad Request")
+        self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
+        self.assertIn('id="customer" name="customer" type="text" list="customer_suggestions" required value="AMAT"', body)
+        self.assertIn('id="contact_name" name="contact_name" type="text" list="contact_suggestions" value=""', body)
+        self.assertNotIn('id="contact_name" name="contact_name" type="text" list="contact_suggestions" value="" disabled', body)
 
     def test_root_post_rejects_contact_that_does_not_belong_to_customer(self) -> None:
         fake_package_service = FakeDocPackageIntakeService()

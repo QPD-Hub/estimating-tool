@@ -1627,6 +1627,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
             Contact
             <input id="contact_name" name="contact_name" type="text" list="contact_suggestions" value="{html.escape(view_state.contact_name)}"{" disabled" if not view_state.customer.strip() else ""}>
             <datalist id="contact_suggestions"></datalist>
+            <span id="contact_lookup_warning" class="status-line hidden"></span>
           </label>
           <label for="quote_due_date">
             Due Date
@@ -1715,8 +1716,20 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
         const customerInput = document.getElementById(customerId);
         const contactInput = document.getElementById(contactId);
         const datalist = document.getElementById(datalistId);
+        const warningEl = document.getElementById("contact_lookup_warning");
         if (!customerInput || !contactInput || !datalist) return;
         let token = 0;
+
+        function setLookupWarning(message) {{
+          if (!warningEl) return;
+          if (!message) {{
+            warningEl.classList.add("hidden");
+            warningEl.textContent = "";
+            return;
+          }}
+          warningEl.classList.remove("hidden");
+          warningEl.textContent = message;
+        }}
 
         function syncContactEnabledState() {{
           const hasCustomer = customerInput.value.trim().length > 0;
@@ -1724,6 +1737,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
           if (!hasCustomer) {{
             contactInput.value = "";
             renderDatalistOptions(datalist, []);
+            setLookupWarning("");
           }}
         }}
 
@@ -1731,6 +1745,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
           const customer = customerInput.value.trim();
           if (!customer) {{
             renderDatalistOptions(datalist, []);
+            setLookupWarning("");
             return;
           }}
           const search = contactInput.value.trim();
@@ -1742,17 +1757,30 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
               "?customer=" + encodeURIComponent(customer) +
               "&search=" + encodeURIComponent(search)
             );
-            if (!response.ok || requestToken !== token) return;
+            if (!response.ok || requestToken !== token) {{
+              if (requestToken === token) {{
+                setLookupWarning("Unable to refresh contact suggestions right now. You can still enter Contact manually.");
+              }}
+              return;
+            }}
             const payload = await response.json();
-            if (!payload || !Array.isArray(payload.items)) return;
+            if (!payload || !Array.isArray(payload.items)) {{
+              setLookupWarning("Unable to refresh contact suggestions right now. You can still enter Contact manually.");
+              return;
+            }}
             renderDatalistOptions(datalist, payload.items);
+            setLookupWarning("");
           }} catch (_err) {{
+            if (requestToken === token) {{
+              setLookupWarning("Unable to refresh contact suggestions right now. You can still enter Contact manually.");
+            }}
           }}
         }}
 
         customerInput.addEventListener("input", function() {{
           contactInput.value = "";
           renderDatalistOptions(datalist, []);
+          setLookupWarning("");
           syncContactEnabledState();
           if (contactInput.disabled) return;
           void loadContacts();
@@ -1763,7 +1791,16 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
           void loadContacts();
         }});
 
-        syncContactEnabledState();
+        function initializeContactLookup() {{
+          syncContactEnabledState();
+          if (!contactInput.disabled) {{
+            void loadContacts();
+          }}
+        }}
+
+        initializeContactLookup();
+        window.addEventListener("load", initializeContactLookup);
+        window.setTimeout(initializeContactLookup, 0);
       }}
 
       hookLookup("customer", "customer_suggestions", "/api/lookups/customers");
