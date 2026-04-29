@@ -254,6 +254,59 @@ class QuotePrepServiceValidationTests(unittest.TestCase):
         self.assertIn("QuoteLineItemAdd", tags[2:first_qty_index])
         self.assertNotIn("QuoteLineItemAdd", tags[first_qty_index + 1 :])
 
+    def test_quote_builder_does_not_interleave_line_items_and_quantities(self) -> None:
+        service = QuotePrepService.__new__(QuotePrepService)
+        xml_text = service._build_quote_add_xml(
+            intake_row={
+                "QuoteNumber": "Q-301",
+                "QuotedBy": "Miguel",
+                "QuoteDueDate": "2026-12-31",
+                "CustomerName": "AMAT",
+            },
+            quote_lines=[
+                {
+                    "lineItemId": "001",
+                    "lineNumber": "001",
+                    "partNumber": "PART-001",
+                    "description": "Line 001",
+                    "revision": "A",
+                    "quantities": [1],
+                },
+                {
+                    "lineItemId": "002",
+                    "lineNumber": "002",
+                    "partNumber": "PART-002",
+                    "description": "Line 002",
+                    "revision": "A",
+                    "quantities": [1],
+                },
+                {
+                    "lineItemId": "003",
+                    "lineNumber": "003",
+                    "partNumber": "PART-003",
+                    "description": "Line 003",
+                    "revision": "A",
+                    "quantities": [1, 25],
+                },
+            ],
+            contact_ref_id="2021",
+        )
+
+        root = ET.fromstring(xml_text)
+        quote_add_rq = root.find("./JBXMLRequest/QuoteAddRq")
+        self.assertIsNotNone(quote_add_rq)
+
+        tags = [node.tag for node in list(quote_add_rq)]
+        self.assertEqual(tags[0], "QuoteAdd")
+        self.assertEqual(tags[1], "QuoteSetUpCustomerInfo")
+
+        first_qty_index = tags.index("QuoteQuantityAdd")
+        self.assertTrue(
+            all(tag == "QuoteLineItemAdd" for tag in tags[2:first_qty_index]),
+            "All nodes between QuoteSetUpCustomerInfo and first QuoteQuantityAdd must be QuoteLineItemAdd.",
+        )
+        self.assertNotIn("QuoteLineItemAdd", tags[first_qty_index + 1 :])
+
 
 if __name__ == "__main__":
     unittest.main()

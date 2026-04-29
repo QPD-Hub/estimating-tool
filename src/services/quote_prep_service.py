@@ -307,6 +307,7 @@ ORDER BY br.BomRootId ASC;
             _append_xml_tag(line_fields, "UsePartMaster", "false")
             line_add_parts.append(f"<QuoteLineItemAdd>{''.join(line_fields)}</QuoteLineItemAdd>")
 
+        for line in quote_lines:
             for qty in line["quantities"]:
                 qty_fields: list[str] = []
                 _append_xml_tag(qty_fields, "LineItemID", line["lineItemId"])
