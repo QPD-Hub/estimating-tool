@@ -189,6 +189,7 @@ ORDER BY br.BomRootId ASC;
         quote_lines: list[dict[str, object]],
     ) -> str:
         quote_add_fields: list[str] = []
+        _append_xml_tag(quote_add_fields, "ID", "")
         _append_xml_tag(quote_add_fields, "Reference", _optional_text(intake_row.get("QuoteNumber")))
         _append_xml_tag(quote_add_fields, "Status", "Active")
         _append_xml_tag(quote_add_fields, "DueDate", _as_iso_date(intake_row.get("QuoteDueDate")))

@@ -106,6 +106,7 @@ class QuotePrepServiceValidationTests(unittest.TestCase):
         request_xml = fake_connection.cursor_obj.last_jobboss_params[9]
         self.assertIn('Session="{SESSION_ID}"', request_xml)
         self.assertIn("<QuoteAddRq>", request_xml)
+        self.assertIn("<QuoteAdd><ID></ID><Reference>Q-100</Reference>", request_xml)
         self.assertIn("<LineItemID>001</LineItemID>", request_xml)
 
 
