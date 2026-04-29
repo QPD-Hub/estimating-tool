@@ -180,7 +180,12 @@ WHERE JobBossRequestId = %s;
             bom_intake_id=bom_intake_id,
         )
         quote_lines = self._build_quote_lines(included_roots)
-        request_xml = self._build_quote_add_xml(intake_row, quote_lines)
+        contact_ref_id = self._resolve_contact_ref_id(cursor=cursor, intake_row=intake_row)
+        request_xml = self._build_quote_add_xml(
+            intake_row=intake_row,
+            quote_lines=quote_lines,
+            contact_ref_id=contact_ref_id,
+        )
         logger.info("JobBOSS QuoteAddRq preview XML: %s", request_xml)
         payload_json = self._build_payload_json(
             bom_intake_id=bom_intake_id,
@@ -268,6 +273,7 @@ ORDER BY br.BomRootId ASC;
         self,
         intake_row: dict[str, object],
         quote_lines: list[dict[str, object]],
+        contact_ref_id: str | None,
     ) -> str:
         quote_add_fields: list[str] = []
         _append_xml_tag(quote_add_fields, "ID", "")
@@ -280,8 +286,9 @@ ORDER BY br.BomRootId ASC;
         _append_xml_ref_id_tag(
             quote_customer_fields, "CustomerRef", _optional_text(intake_row.get("CustomerName"))
         )
+        _append_xml_tag(quote_customer_fields, "OverrideCreditLimit", "false")
         _append_xml_ref_id_tag(
-            quote_customer_fields, "ContactRef", _optional_text(intake_row.get("ContactName"))
+            quote_customer_fields, "ContactRef", contact_ref_id
         )
 
         line_xml_parts: list[str] = []
@@ -313,6 +320,46 @@ ORDER BY br.BomRootId ASC;
             "</JBXMLRequest>"
             "</JBXML>"
         )
+
+    def _resolve_contact_ref_id(
+        self,
+        *,
+        cursor: Any,
+        intake_row: dict[str, object],
+    ) -> str | None:
+        customer_name = _optional_text(intake_row.get("CustomerName"))
+        contact_name = _optional_text(intake_row.get("ContactName"))
+        if customer_name is None or contact_name is None:
+            return None
+
+        try:
+            cursor.execute(
+                """
+SELECT TOP (1)
+    LTRIM(RTRIM(CAST(c.[Contact] AS NVARCHAR(255)))) AS ContactId
+FROM HILLSBORO.dbo.Contact AS c
+WHERE c.Status = 1
+  AND c.Customer IS NOT NULL
+  AND c.Contact_Name IS NOT NULL
+  AND c.[Contact] IS NOT NULL
+  AND LOWER(LTRIM(RTRIM(c.Customer))) = LOWER(%s)
+  AND LOWER(LTRIM(RTRIM(c.Contact_Name))) = LOWER(%s)
+ORDER BY c.[Contact] ASC;
+""",
+                (customer_name, contact_name),
+            )
+            contact_row = cursor.fetchone()
+        except Exception:
+            logger.warning(
+                "Unable to resolve ContactRef ID for customer '%s' and contact '%s'.",
+                customer_name,
+                contact_name,
+            )
+            return None
+
+        if not isinstance(contact_row, dict):
+            return None
+        return _optional_text(contact_row.get("ContactId"))
 
     def _build_payload_json(
         self,

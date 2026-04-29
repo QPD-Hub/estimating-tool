@@ -60,6 +60,9 @@ class QuotePrepServiceValidationTests(unittest.TestCase):
                         }
                     ]
                     return
+                if "FROM HILLSBORO.dbo.Contact AS c" in sql_text:
+                    self._result = {"ContactId": "18"}
+                    return
                 if "usp_JobBossRequest_Create" in sql_text:
                     self.last_jobboss_params = params
                     self._result = {"JobBossRequestId": 321}
@@ -112,11 +115,19 @@ class QuotePrepServiceValidationTests(unittest.TestCase):
             request_xml,
         )
         self.assertIn(
-            '<QuoteSetUpCustomerInfo><CustomerRef ID="ACME" /><ContactRef ID="Alice" /></QuoteSetUpCustomerInfo>',
+            '<QuoteSetUpCustomerInfo><CustomerRef ID="ACME" /><OverrideCreditLimit>false</OverrideCreditLimit><ContactRef ID="18" /></QuoteSetUpCustomerInfo>',
             request_xml,
         )
         self.assertNotIn("<CustomerRef>ACME</CustomerRef>", request_xml)
-        self.assertNotIn("<ContactRef>Alice</ContactRef>", request_xml)
+        self.assertNotIn('<ContactRef ID="Alice" />', request_xml)
+        self.assertLess(
+            request_xml.index('<CustomerRef ID="ACME" />'),
+            request_xml.index("<OverrideCreditLimit>false</OverrideCreditLimit>"),
+        )
+        self.assertLess(
+            request_xml.index("<OverrideCreditLimit>false</OverrideCreditLimit>"),
+            request_xml.index('<ContactRef ID="18" />'),
+        )
         self.assertLess(
             request_xml.index("</QuoteSetUpCustomerInfo>"),
             request_xml.index("<QuoteLineItemAdd>"),
