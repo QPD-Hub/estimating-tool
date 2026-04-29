@@ -305,6 +305,9 @@ class FakeQuotePrepService:
                 "revision": "A",
                 "drawingOrItem": "DRW-100",
                 "quoteQtyBreaks": "1,5,10",
+                "estimatingStatus": "QUOTE_CREATED",
+                "jobBossQuoteNumber": "Q-1000",
+                "sourceLabel": "UPLOAD | ASM-1000 A | QUOTE_CREATED | Quote Q-1000 | rows: 18",
             }
         ]
 
@@ -647,6 +650,7 @@ class WebBomIntakeApiTests(unittest.TestCase):
         self.assertNotIn('name="part_number"', body)
         self.assertIn('name="documents"', body)
         self.assertIn("Process Doc Package", body)
+        self.assertIn('id="theme-toggle"', body)
 
     def test_root_post_routes_package_to_doc_package_intake_service(self) -> None:
         fake_package_service = FakeDocPackageIntakeService()
@@ -702,6 +706,8 @@ class WebBomIntakeApiTests(unittest.TestCase):
         self.assertIn("bom.xlsx", body)
         self.assertIn("Create JobBoss Quote", body)
         self.assertIn('id="open-quote-prep-modal"', body)
+        self.assertIn('id="quote-prep-source-filter"', body)
+        self.assertIn('id="quote-prep-status-filter"', body)
 
     def test_quote_prep_candidates_endpoint_returns_items(self) -> None:
         quote_prep_service = FakeQuotePrepService()
@@ -722,6 +728,8 @@ class WebBomIntakeApiTests(unittest.TestCase):
         payload = json.loads(body)
         self.assertEqual(payload["bomIntakeId"], 987)
         self.assertEqual(payload["items"][0]["bomRootId"], 123)
+        self.assertEqual(payload["items"][0]["estimatingStatus"], "QUOTE_CREATED")
+        self.assertIn("Quote Q-1000", payload["items"][0]["sourceLabel"])
         self.assertEqual(quote_prep_service.get_calls, [987])
 
     def test_quote_prep_save_endpoint_posts_items(self) -> None:

@@ -1,7 +1,11 @@
 import unittest
 import xml.etree.ElementTree as ET
 
-from src.services.quote_prep_service import QuotePrepRequestError, QuotePrepService
+from src.services.quote_prep_service import (
+    QuotePrepRequestError,
+    QuotePrepService,
+    _extract_quote_id_from_response_xml,
+)
 
 
 class QuotePrepServiceValidationTests(unittest.TestCase):
@@ -67,6 +71,9 @@ class QuotePrepServiceValidationTests(unittest.TestCase):
                 if "usp_JobBossRequest_Create" in sql_text:
                     self.last_jobboss_params = params
                     self._result = {"JobBossRequestId": 321}
+                    return
+                if "UPDATE dbo.BOM_Root" in sql_text and "EstimatingStatus = %s" in sql_text:
+                    self._result = None
                     return
                 raise AssertionError("Unexpected SQL executed.")
 
@@ -306,6 +313,53 @@ class QuotePrepServiceValidationTests(unittest.TestCase):
             "All nodes between QuoteSetUpCustomerInfo and first QuoteQuantityAdd must be QuoteLineItemAdd.",
         )
         self.assertNotIn("QuoteLineItemAdd", tags[first_qty_index + 1 :])
+
+    def test_extract_quote_id_prefers_quote_add_rs_id(self) -> None:
+        xml_text = """
+<JBXML>
+  <JBXMLResponse>
+    <QuoteAddRs>
+      <ID>Q-12345</ID>
+    </QuoteAddRs>
+  </JBXMLResponse>
+</JBXML>
+"""
+        self.assertEqual(_extract_quote_id_from_response_xml(xml_text), "Q-12345")
+
+    def test_extract_quote_id_uses_quote_ret_id(self) -> None:
+        xml_text = """
+<JBXML>
+  <JBXMLResponse>
+    <QuoteRet>
+      <ID>Q-777</ID>
+    </QuoteRet>
+  </JBXMLResponse>
+</JBXML>
+"""
+        self.assertEqual(_extract_quote_id_from_response_xml(xml_text), "Q-777")
+
+    def test_candidate_row_includes_status_and_source_label(self) -> None:
+        service = QuotePrepService.__new__(QuotePrepService)
+        row = service._serialize_candidate_row(
+            {
+                "BomRootId": 10,
+                "IncludeInQuote": 1,
+                "Level0PartNumber": "ASM-1000",
+                "Revision": "A",
+                "RootDescription": "Top Assembly",
+                "QuoteQtyBreaks": "1,5,10",
+                "EstimatingStatus": "QUOTE_CREATED",
+                "JobBossQuoteNumber": "Q-9001",
+                "SourceType": "UPLOAD",
+                "RootRowCount": 12,
+            }
+        )
+        self.assertEqual(row["estimatingStatus"], "QUOTE_CREATED")
+        self.assertEqual(row["jobBossQuoteNumber"], "Q-9001")
+        self.assertEqual(
+            row["sourceLabel"],
+            "UPLOAD | ASM-1000 A | QUOTE_CREATED | Quote Q-9001 | rows: 12",
+        )
 
 
 if __name__ == "__main__":

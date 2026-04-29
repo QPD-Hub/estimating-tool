@@ -1113,6 +1113,20 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
         </div>
         <p class="section-note">Choose which level-0 parts to include and define quote quantity breaks.</p>
         <div id="quote-prep-error" class="callout error hidden"></div>
+        <div class="quote-prep-filters">
+          <label for="quote-prep-source-filter">
+            Saved BOM Source
+            <select id="quote-prep-source-filter">
+              <option value="">All sources</option>
+            </select>
+          </label>
+          <label for="quote-prep-status-filter">
+            Estimating Status
+            <select id="quote-prep-status-filter">
+              <option value="">All statuses</option>
+            </select>
+          </label>
+        </div>
         <div class="table-wrap">
           <table>
             <thead>
@@ -1160,6 +1174,24 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       --success-ink: #1f5c39;
       --shadow: 0 20px 40px rgba(37, 30, 22, 0.08);
       --mono: "Consolas", "SFMono-Regular", monospace;
+    }}
+    body[data-theme="dark"] {{
+      color-scheme: dark;
+      --bg: #0f1418;
+      --panel: #1a2329;
+      --panel-alt: #223039;
+      --ink: #ecf2f4;
+      --muted: #b5c4cc;
+      --accent: #50b7c0;
+      --accent-strong: #d5eef0;
+      --accent-soft: rgba(80, 183, 192, 0.2);
+      --border: #31434f;
+      --border-strong: #46606f;
+      --error-bg: #4f2420;
+      --error-ink: #ffd9d2;
+      --success-bg: #1f4232;
+      --success-ink: #d2f6e2;
+      --shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -1258,13 +1290,16 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       font-weight: 600;
     }}
     input[type="text"],
+    input[type="number"],
+    input[type="date"],
     input[type="file"],
+    select,
     textarea {{
       width: 100%;
       padding: 0.8rem 0.9rem;
       border: 1px solid var(--border);
       border-radius: 0.8rem;
-      background: white;
+      background: var(--panel);
       color: var(--ink);
       font: inherit;
     }}
@@ -1356,7 +1391,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       overflow: auto;
       border: 1px solid var(--border);
       border-radius: 0.85rem;
-      background: white;
+      background: var(--panel);
     }}
     table {{
       width: 100%;
@@ -1365,7 +1400,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
     }}
     th, td {{
       padding: 0.7rem 0.8rem;
-      border-bottom: 1px solid #ece4d7;
+      border-bottom: 1px solid var(--border);
       text-align: left;
       vertical-align: top;
       font-size: 0.94rem;
@@ -1373,13 +1408,13 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
     th {{
       position: sticky;
       top: 0;
-      background: #faf5ee;
+      background: var(--panel-alt);
       color: var(--accent-strong);
     }}
     details {{
       border: 1px solid var(--border);
       border-radius: 0.85rem;
-      background: #fff;
+      background: var(--panel);
       padding: 0.85rem 0.95rem;
     }}
     details summary {{
@@ -1414,7 +1449,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       padding: 0.9rem 1rem;
       border: 1px solid var(--border);
       border-radius: 0.85rem;
-      background: rgba(255, 255, 255, 0.6);
+      background: color-mix(in srgb, var(--panel) 82%, transparent);
     }}
     .overview-card h4 {{
       margin: 0 0 0.35rem;
@@ -1461,7 +1496,7 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       border: 1px solid var(--border);
       border-radius: 0.35rem;
       padding: 0.2rem;
-      background: white;
+      background: var(--panel);
     }}
     .qty-list li input {{
       width: 4.25rem;
@@ -1500,6 +1535,21 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       align-items: center;
       margin-bottom: 0.75rem;
     }}
+    .theme-toggle {{
+      border-radius: 999px;
+      padding: 0.55rem 1rem;
+      border: 1px solid var(--border);
+      background: var(--panel-alt);
+      color: var(--ink);
+      font-weight: 700;
+      cursor: pointer;
+    }}
+    .quote-prep-filters {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }}
     @media (max-width: 900px) {{
       .grid,
       .form-grid,
@@ -1526,6 +1576,9 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       table {{
         min-width: 42rem;
       }}
+      .quote-prep-filters {{
+        grid-template-columns: 1fr;
+      }}
     }}
   </style>
 </head>
@@ -1534,7 +1587,10 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
     <section class="panel hero">
       <div class="hero-top">
         <span class="eyebrow">Environment: {app_env}</span>
-        <a class="link-button" href="http://development.qpd.lan:8094/" target="_blank" rel="noopener noreferrer">Bom Formatter</a>
+        <div class="actions">
+          <button type="button" class="theme-toggle" id="theme-toggle">Dark mode</button>
+          <a class="link-button" href="http://development.qpd.lan:8094/" target="_blank" rel="noopener noreferrer">Bom Formatter</a>
+        </div>
       </div>
       <h1>Doc Package Intake</h1>
       <p>Upload a customer document package once. The intake flow flattens and mirrors the processed files into both configured roots, then resolves and processes the BOM intake from the same uploaded package.</p>
@@ -1600,6 +1656,35 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
   </main>
   <script>
     (function() {{
+      const themeToggle = document.getElementById("theme-toggle");
+      const THEME_KEY = "estimatingtool_theme";
+      function applyTheme(theme) {{
+        if (theme === "dark") {{
+          document.body.setAttribute("data-theme", "dark");
+          if (themeToggle) themeToggle.textContent = "Light mode";
+          return;
+        }}
+        document.body.removeAttribute("data-theme");
+        if (themeToggle) themeToggle.textContent = "Dark mode";
+      }}
+      try {{
+        const storedTheme = window.localStorage.getItem(THEME_KEY);
+        applyTheme(storedTheme === "dark" ? "dark" : "light");
+      }} catch (_err) {{
+        applyTheme("light");
+      }}
+      if (themeToggle) {{
+        themeToggle.addEventListener("click", function() {{
+          const isDark = document.body.getAttribute("data-theme") === "dark";
+          const nextTheme = isDark ? "light" : "dark";
+          applyTheme(nextTheme);
+          try {{
+            window.localStorage.setItem(THEME_KEY, nextTheme);
+          }} catch (_err) {{
+          }}
+        }});
+      }}
+
       function renderDatalistOptions(datalist, items) {{
         datalist.innerHTML = items
           .map((item) => "<option value=\\"" + String(item).replaceAll("\\"", "&quot;") + "\\"></option>")
@@ -1699,9 +1784,12 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       const closeQuotePrepButton = document.getElementById("close-quote-prep-modal");
       const saveQuotePrepButton = document.getElementById("save-quote-prep");
       const rowsEl = document.getElementById("quote-prep-rows");
+      const sourceFilterEl = document.getElementById("quote-prep-source-filter");
+      const statusFilterEl = document.getElementById("quote-prep-status-filter");
       const statusEl = document.getElementById("quote-prep-status");
       const errorEl = document.getElementById("quote-prep-error");
       let quotePrepRows = [];
+      let visibleQuotePrepRows = [];
       let activeBomIntakeId = null;
       let bridgePollTimer = null;
 
@@ -1773,10 +1861,36 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
         return qtys.join(",");
       }}
 
+      function populateQuotePrepFilters() {{
+        if (!(sourceFilterEl instanceof HTMLSelectElement) || !(statusFilterEl instanceof HTMLSelectElement)) return;
+        const selectedSource = sourceFilterEl.value;
+        const selectedStatus = statusFilterEl.value;
+        const sourceValues = Array.from(new Set(quotePrepRows.map((row) => String(row.sourceLabel || ""))));
+        const statusValues = Array.from(new Set(quotePrepRows.map((row) => String(row.estimatingStatus || "RAW"))));
+        sourceFilterEl.innerHTML = "<option value=\"\">All sources</option>" +
+          sourceValues.map((value) => "<option value=\"" + value.replaceAll("\"", "&quot;") + "\">" + value.replaceAll("<", "&lt;") + "</option>").join("");
+        statusFilterEl.innerHTML = "<option value=\"\">All statuses</option>" +
+          statusValues.map((value) => "<option value=\"" + value.replaceAll("\"", "&quot;") + "\">" + value.replaceAll("<", "&lt;") + "</option>").join("");
+        sourceFilterEl.value = sourceValues.includes(selectedSource) ? selectedSource : "";
+        statusFilterEl.value = statusValues.includes(selectedStatus) ? selectedStatus : "";
+      }}
+
+      function refreshVisibleRows() {{
+        const sourceFilter = sourceFilterEl instanceof HTMLSelectElement ? sourceFilterEl.value : "";
+        const statusFilter = statusFilterEl instanceof HTMLSelectElement ? statusFilterEl.value : "";
+        visibleQuotePrepRows = quotePrepRows.filter((row) => {{
+          const sourceMatch = !sourceFilter || String(row.sourceLabel || "") === sourceFilter;
+          const statusMatch = !statusFilter || String(row.estimatingStatus || "RAW") === statusFilter;
+          return sourceMatch && statusMatch;
+        }});
+      }}
+
       function renderQuotePrepRows() {{
         if (!rowsEl) return;
+        refreshVisibleRows();
         rowsEl.innerHTML = "";
-        quotePrepRows.forEach((row, index) => {{
+        visibleQuotePrepRows.forEach((row) => {{
+          const index = quotePrepRows.indexOf(row);
           const tr = document.createElement("tr");
           tr.innerHTML =
             "<td><input type=\\"checkbox\\" " + (row.includeInQuote ? "checked" : "") + " data-idx=\\"" + index + "\\" data-act=\\"toggle-include\\"></td>" +
@@ -1904,9 +2018,12 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
               description: String(item.description || ""),
               revision: String(item.revision || ""),
               drawingOrItem: String(item.drawingOrItem || ""),
+              estimatingStatus: String(item.estimatingStatus || "RAW"),
+              sourceLabel: String(item.sourceLabel || ""),
               qtys: qtys.length > 0 ? qtys : [1],
             }};
           }});
+          populateQuotePrepFilters();
           renderQuotePrepRows();
           statusEl.textContent = "Loaded " + quotePrepRows.length + " candidate part(s).";
         }} catch (err) {{
@@ -2006,6 +2123,16 @@ def render_page(config: AppConfig, view_state: ViewState) -> str:
       if (saveQuotePrepButton) {{
         saveQuotePrepButton.addEventListener("click", function() {{
           void saveQuotePrep();
+        }});
+      }}
+      if (sourceFilterEl) {{
+        sourceFilterEl.addEventListener("change", function() {{
+          renderQuotePrepRows();
+        }});
+      }}
+      if (statusFilterEl) {{
+        statusFilterEl.addEventListener("change", function() {{
+          renderQuotePrepRows();
         }});
       }}
     }})();

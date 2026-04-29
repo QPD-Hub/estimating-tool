@@ -86,6 +86,11 @@ EXEC dbo.usp_BOM_Root_SaveQuotePrep
                 cursor=cursor,
                 bom_intake_id=bom_intake_id,
             )
+            self._set_bom_roots_status_for_intake(
+                cursor=cursor,
+                bom_intake_id=bom_intake_id,
+                status="QUOTE_REQUESTED",
+            )
             return bridge_request
         except Exception as exc:
             raise QuotePrepDbError("Failed to save quote prep decisions.") from exc
@@ -154,6 +159,13 @@ WHERE JobBossRequestId = %s;
             quote_id = _extract_quote_id_from_response_xml(response_xml)
             if normalized_status == "Success" and not quote_id:
                 quote_id = None
+
+            self._sync_bom_root_status_from_bridge(
+                cursor=cursor,
+                jobboss_request_id=jobboss_request_id,
+                bridge_status=normalized_status,
+                quote_id=quote_id,
+            )
 
             return {
                 "jobBossRequestId": int(row.get("JobBossRequestId") or jobboss_request_id),
@@ -454,12 +466,34 @@ SELECT @JobBossRequestId AS JobBossRequestId;
         return int(result["JobBossRequestId"])
 
     def _serialize_candidate_row(self, row: dict[str, object]) -> dict[str, object]:
+        part_number = _optional_text(row.get("Level0PartNumber")) or ""
+        revision = _optional_text(row.get("Revision")) or ""
+        part_rev = part_number if not revision else f"{part_number} {revision}"
+        source = (
+            _optional_text(row.get("SourceType"))
+            or _optional_text(row.get("Source"))
+            or "BOM"
+        )
+        estimating_status = _optional_text(row.get("EstimatingStatus")) or "RAW"
+        jobboss_quote_number = _optional_text(row.get("JobBossQuoteNumber"))
+        row_count = row.get("RootRowCount")
+        if not isinstance(row_count, int):
+            try:
+                row_count = int(row_count) if row_count is not None else 0
+            except (TypeError, ValueError):
+                row_count = 0
+        quote_label = (
+            f"Quote {jobboss_quote_number}"
+            if jobboss_quote_number
+            else "Quote -"
+        )
+        source_label = f"{source} | {part_rev} | {estimating_status} | {quote_label} | rows: {row_count}"
         return {
             "bomRootId": row.get("BomRootId"),
             "includeInQuote": bool(row.get("IncludeInQuote", True)),
-            "partNumber": _optional_text(row.get("Level0PartNumber")) or "",
+            "partNumber": part_number,
             "description": _optional_text(row.get("RootDescription")) or "",
-            "revision": _optional_text(row.get("Revision")) or "",
+            "revision": revision,
             "drawingOrItem": (
                 _optional_text(row.get("DrawingNumber"))
                 or _optional_text(row.get("Drawing"))
@@ -468,7 +502,93 @@ SELECT @JobBossRequestId AS JobBossRequestId;
                 or ""
             ),
             "quoteQtyBreaks": _optional_text(row.get("QuoteQtyBreaks")) or "1",
+            "estimatingStatus": estimating_status,
+            "jobBossQuoteNumber": jobboss_quote_number,
+            "sourceLabel": source_label,
         }
+
+    def _set_bom_roots_status_for_intake(
+        self,
+        *,
+        cursor: Any,
+        bom_intake_id: int,
+        status: str,
+    ) -> None:
+        cursor.execute(
+            """
+UPDATE dbo.BOM_Root
+SET EstimatingStatus = %s
+WHERE BomIntakeId = %s
+  AND IncludeInQuote = 1;
+""",
+            (status, bom_intake_id),
+        )
+
+    def _sync_bom_root_status_from_bridge(
+        self,
+        *,
+        cursor: Any,
+        jobboss_request_id: int,
+        bridge_status: str,
+        quote_id: str | None,
+    ) -> None:
+        if bridge_status not in {"Success", "Failed"}:
+            return
+        if bridge_status == "Success" and not quote_id:
+            return
+
+        cursor.execute(
+            """
+SELECT TOP (1)
+    TRY_CONVERT(BIGINT, jr.SourceEntityId) AS BomIntakeId,
+    LTRIM(RTRIM(CAST(jr.RequestedBy AS NVARCHAR(100)))) AS RequestedBy
+FROM dbo.JobBossRequest AS jr
+WHERE jr.JobBossRequestId = %s
+  AND jr.SourceEntityType = 'BOM_Intake';
+""",
+            (jobboss_request_id,),
+        )
+        row = cursor.fetchone()
+        if not isinstance(row, dict):
+            return
+
+        bom_intake_id = row.get("BomIntakeId")
+        try:
+            bom_intake_id = int(bom_intake_id) if bom_intake_id is not None else None
+        except (TypeError, ValueError):
+            bom_intake_id = None
+        if bom_intake_id is None or bom_intake_id <= 0:
+            return
+
+        if bridge_status == "Success":
+            requested_by = _optional_text(row.get("RequestedBy"))
+            cursor.execute(
+                """
+UPDATE br
+SET
+    br.JobBossQuoteNumber = %s,
+    br.EstimatingStatus = 'QUOTE_CREATED',
+    br.QuoteCreatedAt = SYSDATETIME(),
+    br.QuoteCreatedBy = COALESCE(%s, bi.UploadedBy, br.QuoteCreatedBy)
+FROM dbo.BOM_Root AS br
+INNER JOIN dbo.BOM_Intake AS bi
+    ON bi.BomIntakeId = br.BomIntakeId
+WHERE br.BomIntakeId = %s
+  AND br.IncludeInQuote = 1;
+""",
+                (quote_id, requested_by, bom_intake_id),
+            )
+            return
+
+        cursor.execute(
+            """
+UPDATE dbo.BOM_Root
+SET EstimatingStatus = 'QUOTE_FAILED'
+WHERE BomIntakeId = %s
+  AND IncludeInQuote = 1;
+""",
+            (bom_intake_id,),
+        )
 
     def _normalize_save_item(self, item: dict[str, object]) -> dict[str, object]:
         if not isinstance(item, dict):
